@@ -9,6 +9,7 @@ import healthRoutes from "./routes/health.routes";
 import authRoutes from "./routes/auth.routes";
 import userRoutes from "./routes/user.routes";
 import folderRoutes from "./routes/folder.routes";
+import fileRoutes from "./routes/file.routes";
 import { errorHandler } from "./middlewares/errorHandler";
 import { notFound } from "./middlewares/notFound";
 
@@ -33,6 +34,7 @@ app.use("/api/v1", healthRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/folders", folderRoutes);
+app.use("/api/v1/files", fileRoutes);
 
 // 404 & Global Error Handling
 app.use(notFound);
