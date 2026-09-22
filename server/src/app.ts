@@ -10,6 +10,11 @@ import authRoutes from "./routes/auth.routes";
 import userRoutes from "./routes/user.routes";
 import folderRoutes from "./routes/folder.routes";
 import fileRoutes from "./routes/file.routes";
+import storageRoutes from "./routes/storage.routes";
+import permissionRoutes from "./routes/permission.routes";
+import groupRoutes from "./routes/group.routes";
+import shareRoutes from "./routes/share.routes";
+import invitationRoutes from "./routes/invitation.routes";
 import { errorHandler } from "./middlewares/errorHandler";
 import { notFound } from "./middlewares/notFound";
 
@@ -35,6 +40,11 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/folders", folderRoutes);
 app.use("/api/v1/files", fileRoutes);
+app.use("/api/v1/storage", storageRoutes);
+app.use("/api/v1/permissions", permissionRoutes);
+app.use("/api/v1/groups", groupRoutes);
+app.use("/api/v1/shares", shareRoutes);
+app.use("/api/v1/invitations", invitationRoutes);
 
 // 404 & Global Error Handling
 app.use(notFound);

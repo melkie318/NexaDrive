@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { FolderController } from '../controllers/folder.controller';
 import { authenticateUser } from '../middlewares/auth.middleware';
+import { requirePermission } from '../middlewares/permission.middleware';
 
 const router = Router();
 
@@ -11,7 +12,6 @@ const router = Router();
  *   description: Folder management — create, browse, rename, move, and trash folders
  */
 
-// All folder routes require authentication
 router.use(authenticateUser);
 
 /**
@@ -19,7 +19,10 @@ router.use(authenticateUser);
  * /api/v1/folders:
  *   post:
  *     summary: Create a new folder
- *     description: Creates a folder at the root level or nested inside a parent folder. The parent must be owned by the authenticated user and must not be trashed.
+ *     description: |
+ *       Creates a folder at the root level or nested inside a parent folder.
+ *       When a `parentId` is supplied the caller must have **canUpload** on
+ *       that parent folder (owners always pass this check automatically).
  *     tags: [Folders]
  *     security:
  *       - bearerAuth: []
@@ -68,9 +71,12 @@ router.use(authenticateUser);
  *         description: Validation error or parent folder is trashed
  *       401:
  *         description: Not authenticated
+ *       403:
+ *         description: Caller does not have canUpload on the parent folder
  *       404:
- *         description: Parent folder not found or not owned by user
+ *         description: Parent folder not found
  */
+// No per-resource guard here — parentId is optional and validated inside the service
 router.post('/', FolderController.createFolder);
 
 /**
@@ -78,7 +84,9 @@ router.post('/', FolderController.createFolder);
  * /api/v1/folders:
  *   get:
  *     summary: List folders
- *     description: Returns a paginated list of the authenticated user's non-trashed folders at the specified level. Omitting `parentId` returns root-level folders (My Drive).
+ *     description: |
+ *       Returns a paginated list of the authenticated user's non-trashed folders
+ *       at the specified level. Omitting `parentId` returns root-level folders.
  *     tags: [Folders]
  *     security:
  *       - bearerAuth: []
@@ -137,6 +145,7 @@ router.post('/', FolderController.createFolder);
  *       401:
  *         description: Not authenticated
  */
+// List is scoped to ownerId in the service — no per-resource guard needed
 router.get('/', FolderController.listFolders);
 
 /**
@@ -144,7 +153,9 @@ router.get('/', FolderController.listFolders);
  * /api/v1/folders/{id}:
  *   get:
  *     summary: Get a folder by ID
- *     description: Returns the folder's details, its immediate subfolders, and a breadcrumb path from root to this folder.
+ *     description: |
+ *       Returns the folder's details, its immediate subfolders, and a breadcrumb
+ *       path from root to this folder. Requires **canView** on the folder.
  *     tags: [Folders]
  *     security:
  *       - bearerAuth: []
@@ -155,7 +166,6 @@ router.get('/', FolderController.listFolders);
  *         schema:
  *           type: string
  *           format: uuid
- *         description: UUID of the folder
  *     responses:
  *       200:
  *         description: Folder details with subfolders and breadcrumb
@@ -191,19 +201,27 @@ router.get('/', FolderController.listFolders);
  *                                 type: string
  *       401:
  *         description: Not authenticated
+ *       403:
+ *         description: Caller does not have canView on this folder
  *       404:
- *         description: Folder not found or not owned by user
+ *         description: Folder not found
  *       410:
  *         description: Folder is in the trash
  */
-router.get('/:id', FolderController.getFolderById);
+router.get(
+  '/:id',
+  requirePermission('folder', (req) => req.params.id, 'canView'),
+  FolderController.getFolderById,
+);
 
 /**
  * @swagger
  * /api/v1/folders/{id}:
  *   patch:
  *     summary: Rename a folder
- *     description: Updates the folder's name. Only the owner can rename. Trashed folders cannot be renamed.
+ *     description: |
+ *       Updates the folder's name. Requires **canRename** on the folder.
+ *       Trashed folders cannot be renamed.
  *     tags: [Folders]
  *     security:
  *       - bearerAuth: []
@@ -248,10 +266,16 @@ router.get('/:id', FolderController.getFolderById);
  *         description: Validation error or folder is trashed
  *       401:
  *         description: Not authenticated
+ *       403:
+ *         description: Caller does not have canRename on this folder
  *       404:
- *         description: Folder not found or not owned by user
+ *         description: Folder not found
  */
-router.patch('/:id', FolderController.renameFolder);
+router.patch(
+  '/:id',
+  requirePermission('folder', (req) => req.params.id, 'canRename'),
+  FolderController.renameFolder,
+);
 
 /**
  * @swagger
@@ -259,7 +283,8 @@ router.patch('/:id', FolderController.renameFolder);
  *   patch:
  *     summary: Move a folder
  *     description: |
- *       Moves a folder to a new parent. Pass `parentId: null` to move to root (My Drive).
+ *       Moves a folder to a new parent. Pass `parentId: null` to move to root.
+ *       Requires **canMove** on the folder being moved.
  *       Guards against moving a folder into itself or into any of its own descendants.
  *     tags: [Folders]
  *     security:
@@ -285,7 +310,6 @@ router.patch('/:id', FolderController.renameFolder);
  *                 format: uuid
  *                 nullable: true
  *                 description: UUID of the new parent folder, or null to move to root.
- *                 example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
  *     responses:
  *       200:
  *         description: Folder moved successfully
@@ -303,20 +327,28 @@ router.patch('/:id', FolderController.renameFolder);
  *                 data:
  *                   $ref: '#/components/schemas/Folder'
  *       400:
- *         description: Circular move detected, folder is trashed, or destination is trashed
+ *         description: Circular move or folder is trashed
  *       401:
  *         description: Not authenticated
+ *       403:
+ *         description: Caller does not have canMove on this folder
  *       404:
- *         description: Folder or destination not found, or not owned by user
+ *         description: Folder or destination not found
  */
-router.patch('/:id/move', FolderController.moveFolder);
+router.patch(
+  '/:id/move',
+  requirePermission('folder', (req) => req.params.id, 'canMove'),
+  FolderController.moveFolder,
+);
 
 /**
  * @swagger
  * /api/v1/folders/{id}:
  *   delete:
  *     summary: Move a folder to trash
- *     description: Soft-deletes the folder and its entire subtree (all nested subfolders and their files). The original path is preserved for later restoration. Use the Trash API to restore or permanently delete.
+ *     description: |
+ *       Soft-deletes the folder and its entire subtree. Requires **canDelete**
+ *       on the folder. The original path is preserved for later restoration.
  *     tags: [Folders]
  *     security:
  *       - bearerAuth: []
@@ -354,10 +386,16 @@ router.patch('/:id/move', FolderController.moveFolder);
  *         description: Folder is already in the trash
  *       401:
  *         description: Not authenticated
+ *       403:
+ *         description: Caller does not have canDelete on this folder
  *       404:
- *         description: Folder not found or not owned by user
+ *         description: Folder not found
  */
-router.delete('/:id', FolderController.deleteFolder);
+router.delete(
+  '/:id',
+  requirePermission('folder', (req) => req.params.id, 'canDelete'),
+  FolderController.deleteFolder,
+);
 
 /**
  * @swagger

@@ -1,13 +1,11 @@
-import fs from 'fs';
-import fsPromises from 'fs/promises';
-import path from 'path';
 import { pipeline } from 'stream/promises';
 import { createReadStream } from 'fs';
 import { Response } from 'express';
 import prisma from '../lib/prisma';
 import { AppError } from '../middlewares/errorHandler';
-import { config } from '../config/env';
 import { Visibility } from '@prisma/client';
+import { StorageService } from './storage/storage.service';
+import { QuotaService } from './storage/quota.service';
 import { RenameFileInput, MoveFileInput, ListFilesQuery } from '../validations/file.validation';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -30,7 +28,7 @@ function formatFile(file: {
   return {
     id: file.id,
     name: file.name,
-    size: Number(file.size),          // BigInt → number for JSON serialisation
+    size: Number(file.size),
     mimeType: file.mimeType,
     folderId: file.folderId,
     ownerId: file.ownerId,
@@ -43,94 +41,54 @@ function formatFile(file: {
   };
 }
 
-/** Resolves and ensures the user-scoped upload directory exists. */
-async function ensureUserDir(userId: string): Promise<string> {
-  const userDir = path.resolve(config.storage.uploadDir, userId);
-  await fsPromises.mkdir(userDir, { recursive: true });
-  return userDir;
-}
-
-/**
- * Builds a safe, unique storage key for a file.
- * Format: <userId>/<timestamp>-<randomHex>-<sanitisedOriginalName>
- * The random hex prevents collisions on concurrent uploads of the same filename.
- */
-function buildStoragePath(userId: string, originalName: string): string {
-  const timestamp = Date.now();
-  const random = Math.random().toString(16).slice(2, 10);
-  // Strip anything that isn't alphanumeric, dot, dash, or underscore
-  const safe = path.basename(originalName).replace(/[^a-zA-Z0-9._-]/g, '_');
-  return path.join(userId, `${timestamp}-${random}-${safe}`);
-}
-
-/**
- * Returns the absolute filesystem path for a given storage key.
- */
-function absolutePath(storageKey: string): string {
-  return path.resolve(config.storage.uploadDir, storageKey);
-}
-
 // ─── FileService ──────────────────────────────────────────────────────────────
 
 export class FileService {
   /**
    * Persist an uploaded file (already written to disk by multer) into the DB.
-   * Also records the first FileVersion and increments the user's usedStorage.
-   *
-   * @param userId   - authenticated user's ID
-   * @param multerFile - the file object provided by multer
-   * @param folderId - optional target folder UUID (null = root / My Drive)
+   * Quota is checked via QuotaService before anything is persisted.
    */
   static async uploadFile(
     userId: string,
     multerFile: Express.Multer.File,
     folderId?: string | null,
   ) {
-    // ── 1. Quota check ───────────────────────────────────────────────────────
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { storageQuota: true, usedStorage: true },
-    });
-
-    if (!user) throw new AppError('User not found', 404);
-
     const fileSize = BigInt(multerFile.size);
-    const remaining = user.storageQuota - user.usedStorage;
 
-    if (fileSize > remaining) {
-      // Clean up the temp file multer wrote
-      await fsPromises.unlink(multerFile.path).catch(() => null);
+    // ── 1. Quota check ───────────────────────────────────────────────────────
+    const quotaCheck = await QuotaService.check(userId, fileSize);
+    if (!quotaCheck.allowed) {
+      await StorageService.delete(multerFile.path).catch(() => null);
       throw new AppError(
-        `Storage quota exceeded. Available: ${Number(remaining)} bytes, required: ${Number(fileSize)} bytes`,
+        `Storage quota exceeded. Available: ${quotaCheck.available} bytes, required: ${Number(fileSize)} bytes`,
         413,
       );
     }
 
-    // ── 2. Validate folder ownership (if provided) ───────────────────────────
+    // ── 2. Validate folder ownership ─────────────────────────────────────────
     if (folderId) {
       const folder = await prisma.folder.findUnique({
         where: { id: folderId },
-        select: { id: true, ownerId: true, isTrashed: true },
+        select: { ownerId: true, isTrashed: true },
       });
-
       if (!folder || folder.ownerId !== userId) {
-        await fsPromises.unlink(multerFile.path).catch(() => null);
+        await StorageService.delete(multerFile.path).catch(() => null);
         throw new AppError('Target folder not found', 404);
       }
       if (folder.isTrashed) {
-        await fsPromises.unlink(multerFile.path).catch(() => null);
+        await StorageService.delete(multerFile.path).catch(() => null);
         throw new AppError('Cannot upload into a trashed folder', 400);
       }
     }
 
-    // ── 3. Move the temp file to its permanent user-scoped location ───────────
-    const storageKey = buildStoragePath(userId, multerFile.originalname);
-    const destAbsolute = absolutePath(storageKey);
+    // ── 3. Move temp file → permanent location via StorageService ────────────
+    const storageKey = await StorageService.save(
+      multerFile.path,
+      userId,
+      multerFile.originalname,
+    );
 
-    await ensureUserDir(userId);
-    await fsPromises.rename(multerFile.path, destAbsolute);
-
-    // ── 4. Persist metadata + first version + update quota atomically ────────
+    // ── 4. Persist metadata + first version + increment quota atomically ─────
     const file = await prisma.$transaction(async (tx) => {
       const created = await tx.file.create({
         data: {
@@ -154,10 +112,7 @@ export class FileService {
         },
       });
 
-      await tx.user.update({
-        where: { id: userId },
-        data: { usedStorage: { increment: fileSize } },
-      });
+      await QuotaService.increment(userId, fileSize, tx);
 
       return created;
     });
@@ -202,76 +157,40 @@ export class FileService {
 
     return {
       files: files.map(formatFile),
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
   }
 
   // ─── Get File By ID ─────────────────────────────────────────────────────────
 
   static async getFileById(userId: string, fileId: string) {
-    const file = await prisma.file.findUnique({
-      where: { id: fileId },
-    });
+    const file = await prisma.file.findUnique({ where: { id: fileId } });
 
-    if (!file || file.ownerId !== userId) {
-      throw new AppError('File not found', 404);
-    }
-    if (file.isTrashed) {
-      throw new AppError('File is in the trash', 410);
-    }
+    if (!file || file.ownerId !== userId) throw new AppError('File not found', 404);
+    if (file.isTrashed) throw new AppError('File is in the trash', 410);
 
     return formatFile(file);
   }
 
   // ─── Download File ──────────────────────────────────────────────────────────
 
-  /**
-   * Streams the file to the HTTP response.
-   * Supports Range requests for resumable downloads / media seeking.
-   */
   static async downloadFile(userId: string, fileId: string, res: Response): Promise<void> {
-    const file = await prisma.file.findUnique({
-      where: { id: fileId },
-    });
+    const file = await prisma.file.findUnique({ where: { id: fileId } });
 
-    if (!file || file.ownerId !== userId) {
-      throw new AppError('File not found', 404);
-    }
-    if (file.isTrashed) {
-      throw new AppError('File is in the trash', 410);
-    }
+    if (!file || file.ownerId !== userId) throw new AppError('File not found', 404);
+    if (file.isTrashed) throw new AppError('File is in the trash', 410);
 
-    const filePath = absolutePath(file.storagePath);
+    const filePath = StorageService.resolve(file.storagePath);
 
-    // Verify the file actually exists on disk
-    try {
-      await fsPromises.access(filePath, fs.constants.R_OK);
-    } catch {
+    if (!(await StorageService.exists(file.storagePath))) {
       throw new AppError('File data not found on storage', 500);
     }
 
-    const stat = await fsPromises.stat(filePath);
-    const fileSize = stat.size;
-
-    // Path-traversal guard: resolved path must be inside the uploads root
-    const uploadsRoot = path.resolve(config.storage.uploadDir);
-    const resolvedFilePath = path.resolve(filePath);
-    if (!resolvedFilePath.startsWith(uploadsRoot + path.sep) && resolvedFilePath !== uploadsRoot) {
-      throw new AppError('Access denied', 403);
-    }
-
-    // Encode the filename for Content-Disposition (handles non-ASCII names)
+    const fileSize = await StorageService.size(file.storagePath);
     const encodedName = encodeURIComponent(file.name);
-
     const rangeHeader = res.req?.headers?.range;
 
     if (rangeHeader) {
-      // ── Range request ────────────────────────────────────────────────────
       const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
       if (!match) {
         res.status(416).set('Content-Range', `bytes */${fileSize}`).end();
@@ -279,30 +198,27 @@ export class FileService {
       }
 
       const start = match[1] ? parseInt(match[1], 10) : 0;
-      const end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+      const end   = match[2] ? parseInt(match[2], 10) : fileSize - 1;
 
       if (start > end || end >= fileSize) {
         res.status(416).set('Content-Range', `bytes */${fileSize}`).end();
         return;
       }
 
-      const chunkSize = end - start + 1;
-
       res.writeHead(206, {
-        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunkSize,
-        'Content-Type': file.mimeType,
+        'Content-Range':       `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges':       'bytes',
+        'Content-Length':      end - start + 1,
+        'Content-Type':        file.mimeType,
         'Content-Disposition': `attachment; filename*=UTF-8''${encodedName}`,
       });
 
       await pipeline(createReadStream(filePath, { start, end }), res);
     } else {
-      // ── Full download ────────────────────────────────────────────────────
       res.writeHead(200, {
-        'Content-Length': fileSize,
-        'Content-Type': file.mimeType,
-        'Accept-Ranges': 'bytes',
+        'Content-Length':      fileSize,
+        'Content-Type':        file.mimeType,
+        'Accept-Ranges':       'bytes',
         'Content-Disposition': `attachment; filename*=UTF-8''${encodedName}`,
       });
 
@@ -326,12 +242,8 @@ export class FileService {
       select: { id: true, ownerId: true, isTrashed: true, name: true },
     });
 
-    if (!file || file.ownerId !== userId) {
-      throw new AppError('File not found', 404);
-    }
-    if (file.isTrashed) {
-      throw new AppError('Cannot rename a trashed file', 400);
-    }
+    if (!file || file.ownerId !== userId) throw new AppError('File not found', 404);
+    if (file.isTrashed) throw new AppError('Cannot rename a trashed file', 400);
 
     const updated = await prisma.file.update({
       where: { id: fileId },
@@ -357,27 +269,18 @@ export class FileService {
       select: { id: true, ownerId: true, isTrashed: true, folderId: true, name: true },
     });
 
-    if (!file || file.ownerId !== userId) {
-      throw new AppError('File not found', 404);
-    }
-    if (file.isTrashed) {
-      throw new AppError('Cannot move a trashed file', 400);
-    }
+    if (!file || file.ownerId !== userId) throw new AppError('File not found', 404);
+    if (file.isTrashed) throw new AppError('Cannot move a trashed file', 400);
 
     const targetFolderId = data.folderId;
 
     if (targetFolderId !== null) {
       const folder = await prisma.folder.findUnique({
         where: { id: targetFolderId },
-        select: { id: true, ownerId: true, isTrashed: true },
+        select: { ownerId: true, isTrashed: true },
       });
-
-      if (!folder || folder.ownerId !== userId) {
-        throw new AppError('Destination folder not found', 404);
-      }
-      if (folder.isTrashed) {
-        throw new AppError('Cannot move a file into a trashed folder', 400);
-      }
+      if (!folder || folder.ownerId !== userId) throw new AppError('Destination folder not found', 404);
+      if (folder.isTrashed) throw new AppError('Cannot move a file into a trashed folder', 400);
     }
 
     const updated = await prisma.file.update({
@@ -403,68 +306,36 @@ export class FileService {
 
   // ─── Copy File ──────────────────────────────────────────────────────────────
 
-  /**
-   * Creates a physical copy of the file on disk and a new DB record.
-   * The copy starts at version 1 and has the same owner.
-   */
-  static async copyFile(
-    userId: string,
-    fileId: string,
-    targetFolderId?: string | null,
-  ) {
-    const file = await prisma.file.findUnique({
-      where: { id: fileId },
-    });
+  static async copyFile(userId: string, fileId: string, targetFolderId?: string | null) {
+    const file = await prisma.file.findUnique({ where: { id: fileId } });
 
-    if (!file || file.ownerId !== userId) {
-      throw new AppError('File not found', 404);
-    }
-    if (file.isTrashed) {
-      throw new AppError('Cannot copy a trashed file', 400);
-    }
+    if (!file || file.ownerId !== userId) throw new AppError('File not found', 404);
+    if (file.isTrashed) throw new AppError('Cannot copy a trashed file', 400);
 
     // ── Quota check ──────────────────────────────────────────────────────────
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { storageQuota: true, usedStorage: true },
-    });
-
-    if (!user) throw new AppError('User not found', 404);
-
-    const remaining = user.storageQuota - user.usedStorage;
-    if (file.size > remaining) {
+    const quotaCheck = await QuotaService.check(userId, file.size);
+    if (!quotaCheck.allowed) {
       throw new AppError(
-        `Storage quota exceeded. Available: ${Number(remaining)} bytes, required: ${Number(file.size)} bytes`,
+        `Storage quota exceeded. Available: ${quotaCheck.available} bytes, required: ${Number(file.size)} bytes`,
         413,
       );
     }
 
-    // ── Validate destination folder ──────────────────────────────────────────
     const destFolderId = targetFolderId !== undefined ? targetFolderId : file.folderId;
 
     if (destFolderId) {
       const folder = await prisma.folder.findUnique({
         where: { id: destFolderId },
-        select: { id: true, ownerId: true, isTrashed: true },
+        select: { ownerId: true, isTrashed: true },
       });
-      if (!folder || folder.ownerId !== userId) {
-        throw new AppError('Destination folder not found', 404);
-      }
-      if (folder.isTrashed) {
-        throw new AppError('Cannot copy into a trashed folder', 400);
-      }
+      if (!folder || folder.ownerId !== userId) throw new AppError('Destination folder not found', 404);
+      if (folder.isTrashed) throw new AppError('Cannot copy into a trashed folder', 400);
     }
 
-    // ── Copy the physical file ────────────────────────────────────────────────
-    const srcPath = absolutePath(file.storagePath);
-    const copyName = `Copy of ${file.name}`;
-    const newStorageKey = buildStoragePath(userId, copyName);
-    const destPath = absolutePath(newStorageKey);
+    // ── Physical copy via StorageService ─────────────────────────────────────
+    const copyName   = `Copy of ${file.name}`;
+    const newStorageKey = await StorageService.copy(file.storagePath, userId, copyName);
 
-    await ensureUserDir(userId);
-    await fsPromises.copyFile(srcPath, destPath);
-
-    // ── Create DB record + version + update quota ────────────────────────────
     const copy = await prisma.$transaction(async (tx) => {
       const created = await tx.file.create({
         data: {
@@ -488,10 +359,7 @@ export class FileService {
         },
       });
 
-      await tx.user.update({
-        where: { id: userId },
-        data: { usedStorage: { increment: file.size } },
-      });
+      await QuotaService.increment(userId, file.size, tx);
 
       return created;
     });
@@ -520,17 +388,10 @@ export class FileService {
       select: { id: true, ownerId: true, isTrashed: true, name: true, folderId: true },
     });
 
-    if (!file || file.ownerId !== userId) {
-      throw new AppError('File not found', 404);
-    }
-    if (file.isTrashed) {
-      throw new AppError('File is already in the trash', 400);
-    }
+    if (!file || file.ownerId !== userId) throw new AppError('File not found', 404);
+    if (file.isTrashed) throw new AppError('File is already in the trash', 400);
 
-    const originalPath = file.folderId
-      ? `folder:${file.folderId}`
-      : 'root';
-
+    const originalPath = file.folderId ? `folder:${file.folderId}` : 'root';
     const now = new Date();
 
     await prisma.$transaction(async (tx) => {
@@ -538,13 +399,7 @@ export class FileService {
         where: { id: fileId },
         data: { isTrashed: true, trashedAt: now },
       });
-
-      await tx.trashItem.create({
-        data: {
-          fileId,
-          originalPath,
-        },
-      });
+      await tx.trashItem.create({ data: { fileId, originalPath } });
     });
 
     await prisma.activity.create({

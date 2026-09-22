@@ -19,6 +19,9 @@ A cloud file storage and management platform built with **Node.js**, **Express**
   - [Phase 4 — User Management](#phase-4--user-management)
   - [Phase 5 — Folder Management](#phase-5--folder-management)
   - [Phase 6 — File Storage + File Operations](#phase-6--file-storage--file-operations)
+  - [Phase 7 — Storage Quota + Storage Engine](#phase-7--storage-quota--storage-engine)
+  - [Phase 8 — Authorization + Permission Engine](#phase-8--authorization--permission-engine)
+  - [Phase 9 — Sharing + Groups + Invitations](#phase-9--sharing--groups--invitations)
 - [Architecture](#architecture)
 - [Roadmap](#roadmap)
 
@@ -61,23 +64,43 @@ server/
 │   │   ├── auth.controller.ts
 │   │   ├── file.controller.ts
 │   │   ├── folder.controller.ts
+│   │   ├── group.controller.ts
+│   │   ├── invitation.controller.ts
+│   │   ├── permission.controller.ts
+│   │   ├── share.controller.ts
+│   │   ├── storage.controller.ts
 │   │   └── user.controller.ts
 │   ├── middlewares/
-│   │   ├── auth.middleware.ts  # JWT authentication + role guard
-│   │   ├── errorHandler.ts     # Global error handler + AppError
+│   │   ├── auth.middleware.ts      # JWT authentication + role guard
+│   │   ├── errorHandler.ts         # Global error handler + AppError
 │   │   ├── notFound.ts
-│   │   └── upload.middleware.ts # Multer configuration
+│   │   ├── permission.middleware.ts # requirePermission() route guard
+│   │   └── upload.middleware.ts     # Multer configuration
 │   ├── routes/
 │   │   ├── auth.routes.ts
 │   │   ├── file.routes.ts
 │   │   ├── folder.routes.ts
+│   │   ├── group.routes.ts
 │   │   ├── health.routes.ts
+│   │   ├── invitation.routes.ts
+│   │   ├── permission.routes.ts
+│   │   ├── share.routes.ts
+│   │   ├── storage.routes.ts
 │   │   └── user.routes.ts
 │   ├── services/
 │   │   ├── auth.service.ts
 │   │   ├── file.service.ts
 │   │   ├── folder.service.ts
-│   │   └── user.service.ts
+│   │   ├── group.service.ts
+│   │   ├── invitation.service.ts
+│   │   ├── permission.service.ts   # Full permission engine
+│   │   ├── share.service.ts
+│   │   ├── user.service.ts
+│   │   └── storage/
+│   │       ├── storage.provider.ts   # StorageProvider interface
+│   │       ├── local.provider.ts     # LocalStorageProvider (disk)
+│   │       ├── storage.service.ts    # Active provider facade
+│   │       └── quota.service.ts      # Quota check / increment / decrement
 │   ├── types/
 │   │   └── express.d.ts        # Extends Express Request with req.user
 │   ├── utils/
@@ -89,6 +112,10 @@ server/
 │   │   ├── auth.validation.ts
 │   │   ├── file.validation.ts
 │   │   ├── folder.validation.ts
+│   │   ├── group.validation.ts
+│   │   ├── invitation.validation.ts
+│   │   ├── permission.validation.ts
+│   │   ├── share.validation.ts
 │   │   └── user.validation.ts
 │   ├── lib/
 │   │   └── prisma.ts
@@ -454,6 +481,420 @@ Every upload creates a `FileVersion` record (`versionNum: 1`). The copy and futu
 
 ---
 
+### Phase 7 — Storage Quota + Storage Engine
+
+Introduced a clean provider abstraction and a centralised quota service. All file I/O now goes through `StorageService` instead of raw `fs` calls, making a future migration to S3-compatible object storage a single-line change.
+
+#### Storage Engine Architecture
+
+```
+FileService / CopyService
+    ↓
+StorageService  (facade — active provider swap happens here)
+    │
+    ├── LocalStorageProvider   ← current (development)
+    │     └── uploads/<userId>/<timestamp>-<hex>-<name>
+    │
+    └── S3StorageProvider      ← future (production / Phase 20)
+          └── s3://<bucket>/<userId>/...
+```
+
+**`StorageProvider` interface** — every backend must implement:
+
+| Method | Description |
+|---|---|
+| `save(tempPath, userId, name)` | Move temp file to permanent storage, return storage key |
+| `delete(storageKey)` | Remove file (idempotent) |
+| `copy(sourceKey, userId, name)` | Duplicate file to a new key, return new key |
+| `resolve(storageKey)` | Return absolute path (local) or presigned URL (S3) |
+| `exists(storageKey)` | Check file is accessible |
+| `size(storageKey)` | Return byte size |
+
+**`LocalStorageProvider`** adds path-traversal guards on every operation — the resolved path is always verified to sit inside the configured `uploads/` root before any I/O is performed.
+
+#### Quota Engine
+
+`QuotaService` is the single source of truth for all quota logic.
+
+```
+Upload request
+    ↓
+QuotaService.check(userId, fileSize)
+    ↓
+Enough space?
+    ↙ YES                    ↘ NO
+StorageService.save(...)    Reject 413 + cleanup temp file
+    ↓
+Prisma transaction:
+  - Create File record
+  - Create FileVersion
+  - QuotaService.increment(userId, fileSize, tx)   ← inside same tx
+```
+
+| Method | Description |
+|---|---|
+| `check(userId, bytes)` | Returns `{ allowed, quota, used, available, usagePercent }` |
+| `getStats(userId)` | Full quota breakdown including counts and warning flags |
+| `increment(userId, bytes, tx?)` | Add bytes to `usedStorage` (accepts Prisma tx) |
+| `decrement(userId, bytes, tx?)` | Subtract bytes, clamped at zero (for permanent deletes) |
+
+#### Endpoint
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/storage/quota` | Full quota stats for the authenticated user |
+
+**Response example:**
+
+```json
+{
+  "success": true,
+  "message": "Storage quota retrieved",
+  "data": {
+    "storageQuota":     "549755813888",
+    "usedStorage":      "10485760",
+    "availableStorage": "539270053888",
+    "usagePercent":     1.91,
+    "isNearFull":       false,
+    "isFull":           false,
+    "fileCount":        42,
+    "folderCount":      8,
+    "trashedFileCount": 3,
+    "trashedFolderCount": 1
+  }
+}
+```
+
+**`isNearFull`** is `true` when usage reaches 90 % — the frontend can use this to show a storage warning banner. **`isFull`** is `true` when `availableStorage` reaches zero — all uploads will be rejected with 413 until space is freed.
+
+---
+
+### Phase 8 — Authorization + Permission Engine
+
+A full resource-level permission system. Every file and folder operation is now gated by an explicit permission check — owners always pass automatically, and access granted to other users (or groups) is precisely controlled.
+
+#### Permission Roles
+
+| Role | Allowed Operations |
+|---|---|
+| `OWNER` | All 13 operations |
+| `MANAGER` | All except `canManagePermissions` |
+| `EDITOR` | view, download, upload, edit, rename, move, copy, delete, compress, extract |
+| `CONTRIBUTOR` | view, download, upload, copy |
+| `VIEWER` | view, download |
+| `CUSTOM` | Exactly the operations listed in `customOps[]` |
+
+#### All 13 Operations
+
+`canView` · `canDownload` · `canUpload` · `canEdit` · `canRename` · `canMove` · `canCopy` · `canDelete` · `canRestore` · `canCompress` · `canExtract` · `canShare` · `canManagePermissions`
+
+#### Resolution Flow
+
+```
+Request arrives
+  ↓
+authenticateUser   — verify JWT, attach req.user
+  ↓
+requirePermission  — calls PermissionService.can(userId, resourceType, resourceId, operation)
+  ↓
+  ┌─ 1. Is user the resource OWNER?           → ✅ all ops granted
+  ├─ 2. Direct ResourcePermission for userId? → resolve ops from role/customOps
+  ├─ 3. Group ResourcePermission (any group   → resolve ops, union with above
+  │      the user is a member of)?
+  └─ 4. Ancestor folder inheritance?          → walk parent chain, union ops
+  ↓
+Union of all sources (most-permissive wins)
+  ↓
+  allowed? → next()   |   denied? → 403
+```
+
+#### Permission Inheritance
+
+Permissions granted on a **parent folder** automatically propagate down to all descendant folders and files. This means granting a user `VIEWER` on `/Documents` gives them `canView` + `canDownload` on every file and subfolder inside it — without needing individual entries.
+
+```
+Documents  ← user granted EDITOR here
+  ├── University        ← inherits EDITOR
+  │   ├── Projects      ← inherits EDITOR
+  │   └── report.pdf   ← inherits EDITOR
+  └── CV.pdf           ← inherits EDITOR
+```
+
+#### Permission Management API
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/permissions/:resourceType/:resourceId` | Grant permission to a user or group |
+| `GET` | `/api/v1/permissions/:resourceType/:resourceId` | List all permissions on a resource |
+| `GET` | `/api/v1/permissions/:resourceType/:resourceId/me` | Get my effective permission map |
+| `PATCH` | `/api/v1/permissions/:resourceType/:resourceId/:permissionId` | Update role or customOps |
+| `DELETE` | `/api/v1/permissions/:resourceType/:resourceId/:permissionId` | Revoke a permission |
+
+`:resourceType` is `file` or `folder`. All management endpoints require `canManagePermissions` on the resource.
+
+**Grant example:**
+
+```json
+POST /api/v1/permissions/folder/3fa85f64-...
+{
+  "userId": "9b1deb4d-...",
+  "role": "EDITOR"
+}
+```
+
+**Custom role example:**
+
+```json
+POST /api/v1/permissions/file/9b1deb4d-...
+{
+  "groupId": "c1a2b3d4-...",
+  "role": "CUSTOM",
+  "customOps": ["canView", "canDownload", "canCopy"]
+}
+```
+
+**Effective permissions response** (`GET /me`):
+
+```json
+{
+  "canView": true,
+  "canDownload": true,
+  "canUpload": false,
+  "canEdit": false,
+  "canRename": false,
+  "canMove": false,
+  "canCopy": true,
+  "canDelete": false,
+  "canRestore": false,
+  "canCompress": false,
+  "canExtract": false,
+  "canShare": false,
+  "canManagePermissions": false
+}
+```
+
+#### Guards Applied to Existing Routes
+
+| Route | Required Operation |
+|---|---|
+| `GET /api/v1/folders/:id` | `canView` |
+| `PATCH /api/v1/folders/:id` | `canRename` |
+| `PATCH /api/v1/folders/:id/move` | `canMove` |
+| `DELETE /api/v1/folders/:id` | `canDelete` |
+| `GET /api/v1/files/:id` | `canView` |
+| `GET /api/v1/files/:id/download` | `canDownload` |
+| `PATCH /api/v1/files/:id` | `canRename` |
+| `PATCH /api/v1/files/:id/move` | `canMove` |
+| `POST /api/v1/files/:id/copy` | `canCopy` |
+| `DELETE /api/v1/files/:id` | `canDelete` |
+
+`POST /files/upload` — `canUpload` on the destination folder is checked inside `FileService` after multer processes the body (since `folderId` is a form field).
+
+#### `requirePermission` Middleware
+
+Declarative, one-liner route protection:
+
+```typescript
+router.get(
+  '/:id',
+  requirePermission('folder', (req) => req.params.id, 'canView'),
+  FolderController.getFolderById,
+);
+```
+
+The middleware calls `PermissionService.can()`, which resolves ownership first — so **owners always pass without any database permission row needed**.
+
+---
+
+### Phase 9 — Sharing + Groups + Invitations
+
+Full collaboration support enabling users to share files and folders with individuals, groups, or via email invitations. Built on top of Phase 8's permission engine.
+
+#### Group Management
+
+Create groups to organize users for bulk permission grants. Groups have two roles: `ADMIN` (can manage members and group settings) and `MEMBER` (standard group member).
+
+**Group API:**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/groups` | Create a new group (creator becomes ADMIN) |
+| `GET` | `/api/v1/groups` | List all groups I'm a member of |
+| `GET` | `/api/v1/groups/:groupId` | Get group details with member list |
+| `PATCH` | `/api/v1/groups/:groupId` | Update group name/description (admin only) |
+| `DELETE` | `/api/v1/groups/:groupId` | Delete group (admin only) |
+| `POST` | `/api/v1/groups/:groupId/members` | Add a member to the group (admin only) |
+| `DELETE` | `/api/v1/groups/:groupId/members/:memberId` | Remove member (admin or self) |
+| `PATCH` | `/api/v1/groups/:groupId/members/:memberId/role` | Update member role (admin only) |
+
+**Create group example:**
+
+```json
+POST /api/v1/groups
+{
+  "name": "Engineering Team",
+  "description": "All engineering department members"
+}
+```
+
+**Add member example:**
+
+```json
+POST /api/v1/groups/:groupId/members
+{
+  "userId": "9b1deb4d-...",
+  "role": "MEMBER"
+}
+```
+
+**Group protection:**
+- Cannot remove the last ADMIN (must promote another member first)
+- Members can leave groups themselves
+- Deleting a group cascades to all `ResourcePermission` entries granted to that group
+
+#### Direct Sharing
+
+Share files or folders with specific users or groups. Creates both a `Share` record (for tracking) and a `ResourcePermission` entry (for access control).
+
+**Share API:**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/shares/direct` | Share a resource with a specific user |
+| `POST` | `/api/v1/shares/group` | Share a resource with a group |
+| `GET` | `/api/v1/shares/my` | List resources I have shared |
+| `GET` | `/api/v1/shares/with-me` | List resources shared with me |
+| `DELETE` | `/api/v1/shares/:shareId` | Revoke a share |
+
+**Share with user example:**
+
+```json
+POST /api/v1/shares/direct
+{
+  "fileId": "3fa85f64-...",
+  "targetUserId": "9b1deb4d-...",
+  "role": "EDITOR"
+}
+```
+
+**Share with group example:**
+
+```json
+POST /api/v1/shares/group
+{
+  "folderId": "c1a2b3d4-...",
+  "targetGroupId": "7e8f9a0b-...",
+  "role": "VIEWER"
+}
+```
+
+All share operations require `canShare` permission on the resource. Revoking removes both the Share record and the underlying ResourcePermission.
+
+#### Email Invitations
+
+Invite users to access resources via email address. If the invitee already has an account, the invitation is linked immediately. When a new user signs up with that email, pending invitations are automatically discovered.
+
+**Invitation API:**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/invitations` | Send an invitation |
+| `GET` | `/api/v1/invitations/sent` | List invitations I've sent |
+| `GET` | `/api/v1/invitations/received` | List invitations sent to me |
+| `POST` | `/api/v1/invitations/:invitationId/accept` | Accept an invitation |
+| `POST` | `/api/v1/invitations/:invitationId/decline` | Decline an invitation |
+| `POST` | `/api/v1/invitations/:invitationId/cancel` | Cancel invitation (inviter only) |
+
+**Send invitation example:**
+
+```json
+POST /api/v1/invitations
+{
+  "folderId": "3fa85f64-...",
+  "inviteeEmail": "colleague@example.com",
+  "role": "EDITOR",
+  "expiresAt": "2026-12-31T23:59:59Z"
+}
+```
+
+**Invitation lifecycle:**
+
+```
+PENDING  → accept()  → ACCEPTED (grants permission)
+         → decline() → DECLINED (no permission granted)
+         → cancel()  → (deleted)
+         → (expires) → EXPIRED (auto-marked if expiresAt passed)
+```
+
+**Invitation features:**
+- Optional expiration date
+- Auto-link to existing user accounts by email
+- Only the invitee (matching email) can accept/decline
+- Only the inviter can cancel
+- Accepting grants a `ResourcePermission` and updates status to `ACCEPTED`
+
+#### Schema Design
+
+Phase 9 uses nullable foreign keys for polymorphic relationships:
+
+```prisma
+model Share {
+  id           String         @id
+  folderId     String?        // nullable FK
+  fileId       String?        // nullable FK (exactly one must be set)
+  createdById  String
+  sharedWithId String?        // for user shares
+  groupId      String?        // for group shares (exactly one must be set)
+  role         PermissionRole
+}
+
+model Invitation {
+  id           String         @id
+  folderId     String?
+  fileId       String?
+  invitedById  String
+  inviteeEmail String
+  inviteeId    String?        // linked when user exists
+  role         PermissionRole
+  status       InviteStatus   // PENDING, ACCEPTED, DECLINED, EXPIRED
+  expiresAt    DateTime?
+}
+
+model Group {
+  id          String  @id
+  name        String  @unique
+  description String?
+  members     GroupMember[]
+}
+
+model GroupMember {
+  id      String  @id
+  groupId String
+  userId  String
+  role    String  // ADMIN or MEMBER
+}
+```
+
+#### Integration with Permission Engine
+
+All share and invitation operations leverage Phase 8's `PermissionService`:
+- Sharing requires `canShare` permission (checked before creating Share/Invitation)
+- Group shares create `ResourcePermission` entries with `groupId` set
+- Accepting an invitation creates a `ResourcePermission` with the granted role
+- Permission resolution (Phase 8) automatically includes group memberships
+
+**Example flow: Group share**
+
+```
+1. User calls POST /api/v1/shares/group
+2. ShareService checks PermissionService.canShare(actorId, 'folder', folderId)
+3. Creates ResourcePermission { folderId, groupId, role: VIEWER }
+4. Creates Share { folderId, groupId, role: VIEWER } for tracking
+5. All group members now inherit VIEWER on that folder
+```
+
+---
+
 ## Architecture
 
 ```
@@ -496,10 +937,10 @@ Response
 | 4 | User Management | ✅ Done |
 | 5 | Folder Management | ✅ Done |
 | 6 | File Storage + File Operations | ✅ Done |
-| 7 | Storage Quota + Storage Engine | ⏳ Next |
-| 8 | Authorization + Permission Engine | ⏳ Planned |
-| 9 | Sharing + Groups + Invitations | ⏳ Planned |
-| 10 | Trash + Recovery | ⏳ Planned |
+| 7 | Storage Quota + Storage Engine | ✅ Done |
+| 8 | Authorization + Permission Engine | ✅ Done |
+| 9 | Sharing + Groups + Invitations | ✅ Done |
+| 10 | Trash + Recovery | ⏳ Next |
 | 11 | File Versioning | ⏳ Planned |
 | 12 | ZIP Compression + Extraction | ⏳ Planned |
 | 13 | Search | ⏳ Planned |
