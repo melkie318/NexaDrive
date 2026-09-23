@@ -383,33 +383,8 @@ export class FileService {
   // ─── Delete File (soft) ─────────────────────────────────────────────────────
 
   static async deleteFile(userId: string, fileId: string) {
-    const file = await prisma.file.findUnique({
-      where: { id: fileId },
-      select: { id: true, ownerId: true, isTrashed: true, name: true, folderId: true },
-    });
-
-    if (!file || file.ownerId !== userId) throw new AppError('File not found', 404);
-    if (file.isTrashed) throw new AppError('File is already in the trash', 400);
-
-    const originalPath = file.folderId ? `folder:${file.folderId}` : 'root';
-    const now = new Date();
-
-    await prisma.$transaction(async (tx) => {
-      await tx.file.update({
-        where: { id: fileId },
-        data: { isTrashed: true, trashedAt: now },
-      });
-      await tx.trashItem.create({ data: { fileId, originalPath } });
-    });
-
-    await prisma.activity.create({
-      data: {
-        userId,
-        action: 'DELETE',
-        details: JSON.stringify({ fileId, name: file.name, originalPath }),
-      },
-    });
-
-    return { fileId, trashedAt: now.toISOString() };
+    // Delegate to TrashService for consistent trash handling
+    const { TrashService } = await import('./trash.service');
+    return await TrashService.moveFileToTrash(userId, fileId);
   }
 }

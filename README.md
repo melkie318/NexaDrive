@@ -22,6 +22,9 @@ A cloud file storage and management platform built with **Node.js**, **Express**
   - [Phase 7 — Storage Quota + Storage Engine](#phase-7--storage-quota--storage-engine)
   - [Phase 8 — Authorization + Permission Engine](#phase-8--authorization--permission-engine)
   - [Phase 9 — Sharing + Groups + Invitations](#phase-9--sharing--groups--invitations)
+  - [Phase 10 — Trash + Recovery](#phase-10--trash--recovery)
+  - [Phase 11 — File Versioning](#phase-11--file-versioning)
+  - [Phase 12 — ZIP Compression + Extraction](#phase-12--zip-compression--extraction)
 - [Architecture](#architecture)
 - [Roadmap](#roadmap)
 
@@ -69,7 +72,10 @@ server/
 │   │   ├── permission.controller.ts
 │   │   ├── share.controller.ts
 │   │   ├── storage.controller.ts
-│   │   └── user.controller.ts
+│   │   ├── trash.controller.ts
+│   │   ├── user.controller.ts
+│   │   ├── version.controller.ts
+│   │   └── zip.controller.ts
 │   ├── middlewares/
 │   │   ├── auth.middleware.ts      # JWT authentication + role guard
 │   │   ├── errorHandler.ts         # Global error handler + AppError
@@ -86,7 +92,10 @@ server/
 │   │   ├── permission.routes.ts
 │   │   ├── share.routes.ts
 │   │   ├── storage.routes.ts
-│   │   └── user.routes.ts
+│   │   ├── trash.routes.ts
+│   │   ├── user.routes.ts
+│   │   ├── version.routes.ts
+│   │   └── zip.routes.ts
 │   ├── services/
 │   │   ├── auth.service.ts
 │   │   ├── file.service.ts
@@ -95,7 +104,10 @@ server/
 │   │   ├── invitation.service.ts
 │   │   ├── permission.service.ts   # Full permission engine
 │   │   ├── share.service.ts
+│   │   ├── trash.service.ts
 │   │   ├── user.service.ts
+│   │   ├── version.service.ts
+│   │   ├── zip.service.ts
 │   │   └── storage/
 │   │       ├── storage.provider.ts   # StorageProvider interface
 │   │       ├── local.provider.ts     # LocalStorageProvider (disk)
@@ -116,7 +128,10 @@ server/
 │   │   ├── invitation.validation.ts
 │   │   ├── permission.validation.ts
 │   │   ├── share.validation.ts
-│   │   └── user.validation.ts
+│   │   ├── trash.validation.ts
+│   │   ├── user.validation.ts
+│   │   ├── version.validation.ts
+│   │   └── zip.validation.ts
 │   ├── lib/
 │   │   └── prisma.ts
 │   ├── app.ts
@@ -895,6 +910,500 @@ All share and invitation operations leverage Phase 8's `PermissionService`:
 
 ---
 
+### Phase 10 — Trash + Recovery
+
+Soft delete implementation with trash bin, recovery, and automatic cleanup. Files and folders are moved to trash instead of being permanently deleted, with a 30-day retention period before automatic permanent deletion.
+
+#### Trash Operations
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/trash` | Move file or folder to trash (soft delete) |
+| `GET` | `/api/v1/trash` | List all items in trash with expiration dates |
+| `POST` | `/api/v1/trash/:trashItemId/restore` | Restore item from trash |
+| `DELETE` | `/api/v1/trash/:trashItemId` | Permanently delete item from trash |
+| `DELETE` | `/api/v1/trash/empty/all` | Empty entire trash (permanent delete all) |
+
+**Move to trash example:**
+
+```json
+POST /api/v1/trash
+{
+  "fileId": "3fa85f64-..."
+}
+```
+
+**Trash item response:**
+
+```json
+{
+  "id": "7e8f9a0b-...",
+  "type": "file",
+  "originalPath": "/Documents/report.pdf",
+  "deletedAt": "2026-09-21T10:30:00Z",
+  "expiresAt": "2026-10-21T10:30:00Z",
+  "resource": {
+    "id": "3fa85f64-...",
+    "name": "report.pdf",
+    "size": "1048576",
+    "mimeType": "application/pdf",
+    "ownerId": "9b1deb4d-..."
+  }
+}
+```
+
+#### Soft Delete Workflow
+
+```
+DELETE /files/:id or /folders/:id
+  ↓
+FileService.deleteFile() or FolderService.deleteFolder()
+  ↓
+TrashService.moveToTrash()
+  ↓
+  1. Set isTrashed=true, trashedAt=now
+  2. Create TrashItem record with originalPath
+  3. For folders: recursively mark all descendants as trashed
+  ↓
+Item appears in trash bin (GET /api/v1/trash)
+  ↓
+30-day retention period
+  ↓
+autoCleanup() → permanent deletion
+```
+
+#### Folder Tree Behavior
+
+When a folder is trashed:
+- The folder and **all descendants** (subfolders + files) are marked `isTrashed=true`
+- Only one TrashItem is created (for the top-level folder)
+- Restoring the folder restores the entire tree
+- Permanently deleting removes the entire tree and decrements quota
+
+**Example:**
+
+```
+Documents (trashed)
+  ├── University        ← also trashed (recursive)
+  │   ├── Projects      ← also trashed
+  │   └── report.pdf   ← also trashed
+  └── CV.pdf           ← also trashed
+```
+
+Restore `Documents` → entire tree restored with original structure.
+
+#### Permanent Deletion
+
+Permanent deletion:
+- Deletes physical files from disk
+- Removes all database records (File/Folder + TrashItem)
+- Decrements user's storage quota by total size
+- Cannot be undone
+
+**Automatic cleanup:**
+- Runs daily (or on-demand via TrashService.autoCleanup())
+- Permanently deletes items older than 30 days
+- Can be triggered manually or via cron job
+
+#### Access Control
+
+- Only **owners** can trash, restore, or permanently delete their resources
+- Trash operations bypass `canDelete` permission checks (ownership is sufficient)
+- Trashed items are excluded from normal file/folder listings
+- Users can only see their own trashed items
+
+#### Integration with Existing Services
+
+**FileService & FolderService:**
+- `deleteFile()` and `deleteFolder()` now delegate to `TrashService`
+- Consistent trash handling across all deletion operations
+- Existing DELETE routes automatically use soft delete
+
+**Storage Quota:**
+- Trashed files still count toward quota
+- Quota is decremented only on permanent deletion
+- `QuotaService.decrementUsage()` called after physical file removal
+
+---
+
+### Phase 11 — File Versioning
+
+Automatic version history for files with restore capabilities.
+
+**Endpoints:**
+
+```
+GET    /api/v1/files/:fileId/versions          # List all versions of a file
+GET    /api/v1/versions/:id                     # Get version details
+POST   /api/v1/versions/:id/restore             # Restore a specific version
+GET    /api/v1/versions/:id/download            # Download a specific version
+DELETE /api/v1/versions/:id                     # Delete a specific version
+DELETE /api/v1/files/:fileId/versions           # Delete all versions (keep current)
+```
+
+#### Version Operations
+
+**List versions:**
+
+```bash
+GET /api/v1/files/3fa85f64-.../versions?limit=10
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "File versions retrieved successfully",
+  "data": [
+    {
+      "id": "7e8f9a0b-...",
+      "fileId": "3fa85f64-...",
+      "versionNum": 3,
+      "path": "uploads/versions/...",
+      "size": 2048576,
+      "createdAt": "2026-09-21T14:30:00Z"
+    },
+    {
+      "id": "6d7e8f9a-...",
+      "fileId": "3fa85f64-...",
+      "versionNum": 2,
+      "path": "uploads/versions/...",
+      "size": 2020000,
+      "createdAt": "2026-09-20T10:15:00Z"
+    }
+  ],
+  "meta": {
+    "total": 3,
+    "maxVersionsPerFile": 10
+  }
+}
+```
+
+**Restore version:**
+
+```bash
+POST /api/v1/versions/7e8f9a0b-.../restore
+```
+
+Restores the specified version as the current file content. Automatically creates a backup of the current version before restoring.
+
+**Download version:**
+
+```bash
+GET /api/v1/versions/7e8f9a0b-.../download
+```
+
+Downloads a specific version with a timestamped filename (e.g., `report_v3_20260921.pdf`).
+
+#### Automatic Versioning Workflow
+
+```
+File Upload/Update
+  ↓
+VersionService.createVersion()
+  ↓
+  1. Copy current file to versions directory
+  2. Create FileVersion record (increment versionNum)
+  3. Check version limit (MAX_VERSIONS_PER_FILE)
+  ↓
+If limit exceeded:
+  → enforceVersionLimit()
+  → Delete oldest version (FIFO)
+  → Keep latest N versions
+```
+
+#### Version Restore with Backup
+
+```
+POST /versions/:id/restore
+  ↓
+VersionService.restoreVersion()
+  ↓
+  1. Create backup of current file (new version)
+  2. Copy specified version → current file location
+  3. Update File record metadata (size, path if needed)
+  4. Handle quota adjustments if size changed
+  ↓
+Current file now matches selected version
+Previous current file preserved as a version
+```
+
+#### Version Limits & Cleanup
+
+- **MAX_VERSIONS_PER_FILE:** 10 versions per file
+- **FIFO cleanup:** Oldest versions automatically deleted when limit exceeded
+- **Manual cleanup:** Delete specific versions or all versions (keeps current)
+- **Storage:** Versions stored in separate directory (`uploads/versions/`)
+- **Quota:** Versions do NOT count toward user storage quota (only current file counts)
+
+#### Download with Versioned Filenames
+
+Version downloads use timestamped filenames for clarity:
+
+```
+Original: report.pdf
+Version 3: report_v3_20260921.pdf
+Version 2: report_v2_20260920.pdf
+```
+
+#### Access Control
+
+- Users must have **VIEW** permission to list/download versions
+- Users must have **EDIT** permission to restore versions
+- Users must have **MANAGE** permission to delete versions
+- Only file owners can delete all versions at once
+
+#### Version Metadata
+
+Each `FileVersion` record stores:
+- `versionNum` — sequential version number (1, 2, 3...)
+- `path` — physical path to version file
+- `size` — version file size in bytes
+- `createdAt` — timestamp of version creation
+
+#### Integration Points
+
+**Automatic version creation:**
+- File upload (initial version creation)
+- File copy operations
+- Future: File update endpoint (when implemented)
+
+**Version management:**
+- Restore triggers new version creation (backup)
+- Delete version removes physical file + record
+- Trash operations do NOT affect versions (versions persist)
+
+---
+
+### Phase 12 — ZIP Compression + Extraction
+
+Compress folders/files into ZIP archives and extract ZIP files with folder structure preservation.
+
+**Endpoints:**
+
+```
+POST   /api/v1/zip/folder          # Compress a folder (recursive)
+POST   /api/v1/zip/files            # Compress multiple files
+POST   /api/v1/zip/extract          # Extract a ZIP file
+```
+
+#### ZIP Operations
+
+**Compress folder:**
+
+```bash
+POST /api/v1/zip/folder
+{
+  "folderId": "3fa85f64-..."
+}
+```
+
+**Response:**  
+Returns a binary ZIP file download stream. The ZIP file includes the entire folder structure recursively.
+
+**Filename format:** `FolderName_1695302400000.zip`
+
+**Compress files:**
+
+```bash
+POST /api/v1/zip/files
+{
+  "fileIds": ["3fa85f64-...", "4gb96g75-...", "5hc07h86-..."]
+}
+```
+
+**Response:**  
+Returns a binary ZIP file download stream containing the specified files.
+
+**Filename format:** `files_1695302400000.zip`  
+**Limit:** Maximum 100 files per compression operation.
+
+**Extract ZIP:**
+
+```bash
+POST /api/v1/zip/extract
+{
+  "fileId": "7e8f9a0b-...",
+  "targetFolderId": "9b1deb4d-..."  // optional
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "ZIP file extracted successfully",
+  "data": {
+    "extractedFiles": 42,
+    "extractedFolders": 8,
+    "totalSize": 15728640
+  }
+}
+```
+
+If `targetFolderId` is omitted, extracts to the ZIP file's parent folder.
+
+#### Compression Workflow
+
+```
+POST /zip/folder or /zip/files
+  ↓
+ZipService.compressFolder() or .compressFiles()
+  ↓
+  1. Check permissions (user must have VIEW access)
+  2. Create archiver instance (zlib level 9)
+  3. Add files/folders recursively to archive
+  4. Generate temp ZIP file in uploads/temp/
+  5. Stream ZIP file for download
+  ↓
+res.download() → client receives ZIP
+  ↓
+Auto-cleanup: delete temp ZIP after download
+```
+
+#### Extraction Workflow
+
+```
+POST /zip/extract
+  ↓
+ZipService.extractZip()
+  ↓
+  1. Validate file is a ZIP archive
+  2. Check permissions (VIEW on ZIP, WRITE on target folder)
+  3. Calculate uncompressed size
+  4. Check user quota (must have space for extraction)
+  ↓
+  5. Extract entries:
+     - Directories → create Folder records
+     - Files → create File records + write to disk
+  6. Preserve folder structure (nested paths)
+  7. Increment quota by total extracted size
+  ↓
+Return extraction statistics
+```
+
+#### Folder Structure Preservation
+
+**Example ZIP structure:**
+
+```
+Documents.zip
+  ├── University/
+  │   ├── Projects/
+  │   │   └── thesis.pdf
+  │   └── report.pdf
+  └── CV.pdf
+```
+
+**After extraction:**
+
+```
+Target Folder
+  └── University (Folder)
+      ├── Projects (Folder)
+      │   └── thesis.pdf (File)
+      └── report.pdf (File)
+  └── CV.pdf (File)
+```
+
+The entire nested folder hierarchy is recreated with proper parent-child relationships.
+
+#### Quota & Storage Checks
+
+**Compression:**
+- No quota check (download only, no storage impact)
+- Permission check: user must have VIEW access to all files/folders
+
+**Extraction:**
+- Pre-extraction quota check: calculates uncompressed ZIP size
+- Fails if user has insufficient quota
+- Quota incremented only after successful extraction
+- Each extracted file counts toward quota individually
+
+#### Access Control
+
+**Compress folder:**
+- User must have **VIEW** permission for the folder
+- Permission propagates to all descendants (recursive check)
+
+**Compress files:**
+- User must have **VIEW** permission for each file
+- Permission check performed for all file IDs before compression
+
+**Extract ZIP:**
+- User must have **VIEW** permission for the ZIP file
+- User must have **WRITE** permission for the target folder
+- Extracted files are owned by the user performing extraction
+
+#### Temporary File Management
+
+**Compression:**
+- Temp ZIP files created in `uploads/temp/` directory
+- Auto-deleted after download completion
+- Manual cleanup via `ZipService.cleanupTempZip()`
+
+**Extraction:**
+- Extracted files written directly to `uploads/` directory
+- No temporary storage (direct write-through)
+- File records created in database immediately
+
+#### MIME Type Detection
+
+Extracted files automatically get MIME types based on file extensions:
+
+```typescript
+.pdf  → application/pdf
+.txt  → text/plain
+.jpg  → image/jpeg
+.png  → image/png
+.zip  → application/zip
+.mp4  → video/mp4
+// ... etc
+```
+
+Falls back to `application/octet-stream` for unknown extensions.
+
+#### Compression Level
+
+Uses **zlib level 9** (maximum compression) via archiver:
+
+```typescript
+archiver('zip', { zlib: { level: 9 } })
+```
+
+Provides optimal file size reduction at the cost of slightly longer compression time.
+
+#### Error Handling
+
+**Compression failures:**
+- File not found on disk (logs warning, continues)
+- Permission denied (rejects before compression)
+- Archive write errors (rejects, no partial download)
+
+**Extraction failures:**
+- Invalid ZIP format (rejects before extraction)
+- Quota exceeded (rejects before extraction)
+- Target folder not found (rejects before extraction)
+- Disk write errors (partial extraction possible)
+
+#### Integration with Existing Services
+
+**PermissionService:**
+- All operations check appropriate permissions
+- Recursive permission checks for folder compression
+
+**QuotaService:**
+- Pre-extraction quota validation
+- Post-extraction quota increment
+
+**FileService & FolderService:**
+- Extracted files/folders created via existing services
+- Maintains consistency with upload workflows
+
+---
+
 ## Architecture
 
 ```
@@ -940,10 +1449,10 @@ Response
 | 7 | Storage Quota + Storage Engine | ✅ Done |
 | 8 | Authorization + Permission Engine | ✅ Done |
 | 9 | Sharing + Groups + Invitations | ✅ Done |
-| 10 | Trash + Recovery | ⏳ Next |
-| 11 | File Versioning | ⏳ Planned |
-| 12 | ZIP Compression + Extraction | ⏳ Planned |
-| 13 | Search | ⏳ Planned |
+| 10 | Trash + Recovery | ✅ Done |
+| 11 | File Versioning | ✅ Done |
+| 12 | ZIP Compression + Extraction | ✅ Done |
+| 13 | Search | ⏳ Next |
 | 14 | CLI / Command Interface | ⏳ Planned |
 | 15 | Activity Logs + Notifications | ⏳ Planned |
 | 16 | Admin System | ⏳ Planned |

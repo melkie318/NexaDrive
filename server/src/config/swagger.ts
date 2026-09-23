@@ -52,8 +52,8 @@ const swaggerOptions: swaggerJsdoc.Options = {
         description: "File upload, download, metadata, and visibility management",
       },
       {
-        name: "File Versions",
-        description: "File version history and rollback",
+        name: "Versions",
+        description: "File version history, restore, and rollback",
       },
       {
         name: "Sharing",
@@ -82,6 +82,10 @@ const swaggerOptions: swaggerJsdoc.Options = {
         description: "Soft-delete, restore, and permanent deletion of files and folders",
       },
       {
+        name: "ZIP",
+        description: "ZIP compression and extraction operations",
+      },
+      {
         name: "Storage Plans",
         description: "Available storage plans and pricing (Free, Premium, Business)",
       },
@@ -108,4 +112,4 @@ const swaggerOptions: swaggerJsdoc.Options = {
   apis: ["./src/routes/*.ts", "./src/controllers/*.ts"],
 };
 
-export const swaggerSpec = swaggerJsdoc(swaggerOptions);
+export const swaggerSpec = swaggerJsdoc(swaggerOptions);

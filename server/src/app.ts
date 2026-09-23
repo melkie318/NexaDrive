@@ -15,6 +15,9 @@ import permissionRoutes from "./routes/permission.routes";
 import groupRoutes from "./routes/group.routes";
 import shareRoutes from "./routes/share.routes";
 import invitationRoutes from "./routes/invitation.routes";
+import trashRoutes from "./routes/trash.routes";
+import versionRoutes from "./routes/version.routes";
+import zipRoutes from "./routes/zip.routes";
 import { errorHandler } from "./middlewares/errorHandler";
 import { notFound } from "./middlewares/notFound";
 
@@ -45,6 +48,9 @@ app.use("/api/v1/permissions", permissionRoutes);
 app.use("/api/v1/groups", groupRoutes);
 app.use("/api/v1/shares", shareRoutes);
 app.use("/api/v1/invitations", invitationRoutes);
+app.use("/api/v1/trash", trashRoutes);
+app.use("/api/v1", versionRoutes);
+app.use("/api/v1/zip", zipRoutes);
 
 // 404 & Global Error Handling
 app.use(notFound);
