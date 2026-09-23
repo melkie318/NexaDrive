@@ -154,7 +154,7 @@ export class ShareController {
    *         description: Share revoked successfully
    */
   static revokeShare = asyncHandler(async (req: Request, res: Response) => {
-    const result = await ShareService.revoke(req.user!.id, req.params.shareId);
+    const result = await ShareService.revoke(req.user!.id, req.params.shareId as string);
     return sendResponse(res, {
       statusCode: 200,
       message: 'Share revoked successfully',

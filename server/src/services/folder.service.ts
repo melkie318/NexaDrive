@@ -334,50 +334,8 @@ export class FolderService {
    * Creates a TrashItem with the original path so it can be restored.
    */
   static async deleteFolder(userId: string, folderId: string) {
-    const folder = await prisma.folder.findUnique({
-      where: { id: folderId },
-      select: { id: true, ownerId: true, isTrashed: true, name: true, parentId: true },
-    });
-
-    if (!folder || folder.ownerId !== userId) {
-      throw new AppError('Folder not found', 404);
-    }
-    if (folder.isTrashed) {
-      throw new AppError('Folder is already in the trash', 400);
-    }
-
-    const originalPath = await buildFolderPath(folderId);
-    const now = new Date();
-
-    // Collect all descendant IDs so we can bulk-trash the entire subtree
-    const descendantIds = await getDescendantIds(folderId);
-    const allFolderIds = [folderId, ...descendantIds];
-
-    await prisma.$transaction(async (tx) => {
-      // Soft-delete the folder and all descendants
-      await tx.folder.updateMany({
-        where: { id: { in: allFolderIds } },
-        data: { isTrashed: true, trashedAt: now },
-      });
-
-      // Create a TrashItem only for the top-level folder being trashed
-      // (descendants are implicitly trashed along with their root)
-      await tx.trashItem.create({
-        data: {
-          folderId,
-          originalPath,
-        },
-      });
-    });
-
-    await prisma.activity.create({
-      data: {
-        userId,
-        action: 'DELETE',
-        details: JSON.stringify({ folderId, name: folder.name, originalPath }),
-      },
-    });
-
-    return { folderId, trashedAt: now.toISOString() };
+    // Delegate to TrashService for consistent trash handling
+    const { TrashService } = await import('./trash.service');
+    return await TrashService.moveFolderToTrash(userId, folderId);
   }
 }
