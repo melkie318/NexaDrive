@@ -86,6 +86,18 @@ const swaggerOptions: swaggerJsdoc.Options = {
         description: "ZIP compression and extraction operations",
       },
       {
+        name: "Search",
+        description: "Search files and folders with advanced filters, type categories, and special queries",
+      },
+      {
+        name: "Activities",
+        description: "User activity logs and history tracking",
+      },
+      {
+        name: "Notifications",
+        description: "User notifications for shares, downloads, quota alerts, and invitations",
+      },
+      {
         name: "Storage Plans",
         description: "Available storage plans and pricing (Free, Premium, Business)",
       },

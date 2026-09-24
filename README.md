@@ -25,6 +25,9 @@ A cloud file storage and management platform built with **Node.js**, **Express**
   - [Phase 10 — Trash + Recovery](#phase-10--trash--recovery)
   - [Phase 11 — File Versioning](#phase-11--file-versioning)
   - [Phase 12 — ZIP Compression + Extraction](#phase-12--zip-compression--extraction)
+  - [Phase 13 — Search](#phase-13--search)
+  - [Phase 14 — CLI / Command Interface](#phase-14--cli--command-interface)
+  - [Phase 15 — Activity Logs + Notifications](#phase-15--activity-logs--notifications)
 - [Architecture](#architecture)
 - [Roadmap](#roadmap)
 
@@ -71,6 +74,7 @@ server/
 │   │   ├── invitation.controller.ts
 │   │   ├── permission.controller.ts
 │   │   ├── share.controller.ts
+│   │   ├── search.controller.ts
 │   │   ├── storage.controller.ts
 │   │   ├── trash.controller.ts
 │   │   ├── user.controller.ts
@@ -91,6 +95,7 @@ server/
 │   │   ├── invitation.routes.ts
 │   │   ├── permission.routes.ts
 │   │   ├── share.routes.ts
+│   │   ├── search.routes.ts
 │   │   ├── storage.routes.ts
 │   │   ├── trash.routes.ts
 │   │   ├── user.routes.ts
@@ -104,6 +109,7 @@ server/
 │   │   ├── invitation.service.ts
 │   │   ├── permission.service.ts   # Full permission engine
 │   │   ├── share.service.ts
+│   │   ├── search.service.ts
 │   │   ├── trash.service.ts
 │   │   ├── user.service.ts
 │   │   ├── version.service.ts
@@ -128,6 +134,7 @@ server/
 │   │   ├── invitation.validation.ts
 │   │   ├── permission.validation.ts
 │   │   ├── share.validation.ts
+│   │   ├── search.validation.ts
 │   │   ├── trash.validation.ts
 │   │   ├── user.validation.ts
 │   │   ├── version.validation.ts
@@ -1404,6 +1411,1224 @@ Provides optimal file size reduction at the cost of slightly longer compression 
 
 ---
 
+### Phase 13 — Search
+
+Full-text search across files and folders with advanced filters, type categories, and special queries.
+
+**Endpoints:**
+
+```
+GET    /api/v1/search                    # Global search (files + folders)
+GET    /api/v1/search/files              # Search files with advanced filters
+GET    /api/v1/search/folders            # Search folders with filters
+GET    /api/v1/search/type/:category     # Search by file type category
+GET    /api/v1/search/recent             # Get recently modified files
+GET    /api/v1/search/large              # Get large files sorted by size
+```
+
+#### Search Operations
+
+**Global search:**
+
+```bash
+GET /api/v1/search?query=report&page=1&limit=20
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Search completed successfully",
+  "data": {
+    "files": {
+      "results": [
+        {
+          "id": "3fa85f64-...",
+          "name": "annual-report.pdf",
+          "size": 2048576,
+          "mimeType": "application/pdf",
+          "folderId": "9b1deb4d-...",
+          "createdAt": "2026-09-20T10:00:00Z"
+        }
+      ],
+      "total": 12,
+      "page": 1,
+      "limit": 10,
+      "totalPages": 2
+    },
+    "folders": {
+      "results": [
+        {
+          "id": "7e8f9a0b-...",
+          "name": "Reports",
+          "parentId": "5hc07h86-...",
+          "createdAt": "2026-08-15T08:00:00Z",
+          "_count": {
+            "files": 8,
+            "children": 2
+          }
+        }
+      ],
+      "total": 3,
+      "page": 1,
+      "limit": 10,
+      "totalPages": 1
+    },
+    "totalResults": 15
+  }
+}
+```
+
+**Advanced file search:**
+
+```bash
+GET /api/v1/search/files?query=presentation&mimeType=application/pdf&minSize=1000000&maxSize=50000000&startDate=2026-01-01&folderId=abc123&includeSubfolders=true&page=1&limit=20
+```
+
+Supports multiple filters:
+- `query` — File name search (case-insensitive)
+- `mimeType` — Filter by MIME type
+- `minSize` / `maxSize` — Size range in bytes
+- `startDate` / `endDate` — Creation date range
+- `folderId` — Search within specific folder
+- `includeSubfolders` — Recursive subfolder search
+
+**Search by type category:**
+
+```bash
+GET /api/v1/search/type/image?page=1&limit=20
+```
+
+**Categories:**
+- `image` — All image files (image/*)
+- `video` — All video files (video/*)
+- `audio` — All audio files (audio/*)
+- `document` — Documents (PDF, Word, Excel, text files)
+- `archive` — Compressed files (ZIP, RAR, 7Z, TAR)
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "image files retrieved successfully",
+  "data": [
+    {
+      "id": "3fa85f64-...",
+      "name": "photo.jpg",
+      "size": 1024768,
+      "mimeType": "image/jpeg",
+      "createdAt": "2026-09-20T10:00:00Z"
+    }
+  ],
+  "meta": {
+    "total": 45,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 3
+  }
+}
+```
+
+#### Search Filters
+
+**File search filters:**
+
+| Filter | Type | Description |
+|--------|------|-------------|
+| `query` | string | File name search (case-insensitive contains) |
+| `mimeType` | string | Filter by MIME type (partial match) |
+| `minSize` | integer | Minimum file size in bytes |
+| `maxSize` | integer | Maximum file size in bytes |
+| `startDate` | date-time | Files created after this date |
+| `endDate` | date-time | Files created before this date |
+| `folderId` | uuid | Search within specific folder |
+| `includeSubfolders` | boolean | Include all descendant folders (recursive) |
+| `page` | integer | Page number (default: 1) |
+| `limit` | integer | Results per page (1-100, default: 20) |
+
+**Folder search filters:**
+
+| Filter | Type | Description |
+|--------|------|-------------|
+| `query` | string | Folder name search (case-insensitive contains) |
+| `startDate` | date-time | Folders created after this date |
+| `endDate` | date-time | Folders created before this date |
+| `folderId` | uuid | Search within specific parent folder |
+| `includeSubfolders` | boolean | Include all descendant folders (recursive) |
+| `page` | integer | Page number (default: 1) |
+| `limit` | integer | Results per page (1-100, default: 20) |
+
+#### Recursive Subfolder Search
+
+When `includeSubfolders=true`, the search includes all descendant folders:
+
+```
+Documents (folderId: abc123)
+  ├── University
+  │   ├── Projects
+  │   └── Lectures
+  └── Work
+      └── Reports
+```
+
+**Search in Documents with subfolders:**
+
+```bash
+GET /api/v1/search/files?folderId=abc123&includeSubfolders=true
+```
+
+Returns files from:
+- Documents
+- University
+- Projects
+- Lectures
+- Work
+- Reports
+
+**Without subfolders (default):**
+
+```bash
+GET /api/v1/search/files?folderId=abc123
+```
+
+Returns files only from Documents (immediate children).
+
+#### Special Search Queries
+
+**Recent files:**
+
+```bash
+GET /api/v1/search/recent?limit=20
+```
+
+Returns recently modified files sorted by `updatedAt` (descending). Useful for "Recent Files" dashboard widgets.
+
+**Large files:**
+
+```bash
+GET /api/v1/search/large?minSize=10485760&limit=20
+```
+
+Returns files sorted by size (descending). Default `minSize` is 10 MB (10,485,760 bytes). Useful for storage management and cleanup.
+
+#### Search Performance
+
+**Text search:**
+- Uses case-insensitive `ILIKE` queries (PostgreSQL)
+- Indexes on `name` field for faster lookups
+- Limited to 255 characters per query
+
+**Pagination:**
+- All search endpoints support pagination
+- Default limit: 20 results per page
+- Maximum limit: 100 results per page
+- Returns `total`, `page`, `limit`, `totalPages` metadata
+
+**Filtering:**
+- Multiple filters combined with AND logic
+- Date ranges: inclusive on both sides
+- Size ranges: supports open-ended queries (only min or only max)
+
+#### Access Control
+
+- All searches scoped to authenticated user (`ownerId`)
+- Only non-trashed items returned (`isTrashed: false`)
+- Shared files NOT included in search results (owner-only)
+- No cross-user search capability
+
+#### Response Format
+
+**Standard pagination response:**
+
+```json
+{
+  "success": true,
+  "message": "...",
+  "data": [ /* results array */ ],
+  "meta": {
+    "total": 100,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 5
+  }
+}
+```
+
+**Global search response:**
+
+```json
+{
+  "success": true,
+  "message": "Search completed successfully",
+  "data": {
+    "files": { /* file results with pagination */ },
+    "folders": { /* folder results with pagination */ },
+    "totalResults": 150
+  }
+}
+```
+
+#### Type Category MIME Mappings
+
+**Image:**
+- All files starting with `image/` (JPEG, PNG, GIF, WebP, SVG, etc.)
+
+**Video:**
+- All files starting with `video/` (MP4, AVI, MOV, WebM, etc.)
+
+**Audio:**
+- All files starting with `audio/` (MP3, WAV, OGG, FLAC, etc.)
+
+**Document:**
+- `application/pdf`
+- `application/msword` (DOC)
+- `application/vnd.*` (DOCX, XLSX, PPTX, etc.)
+- `text/*` (TXT, CSV, etc.)
+
+**Archive:**
+- `application/zip`
+- `application/x-rar`
+- `application/x-7z-compressed`
+- `application/x-tar`
+
+#### Use Cases
+
+**Dashboard "Recent Files" widget:**
+```bash
+GET /api/v1/search/recent?limit=10
+```
+
+**Storage cleanup (find large files):**
+```bash
+GET /api/v1/search/large?minSize=52428800&limit=50  # Files > 50 MB
+```
+
+**Find all presentations in a folder:**
+```bash
+GET /api/v1/search/files?query=presentation&folderId=abc123&includeSubfolders=true
+```
+
+**Find all images created this month:**
+```bash
+GET /api/v1/search/type/image?startDate=2026-09-01&endDate=2026-09-30
+```
+
+**Search for specific file name:**
+```bash
+GET /api/v1/search/files?query=invoice-2026.pdf
+```
+
+**Browse all documents:**
+```bash
+GET /api/v1/search/type/document?page=1&limit=50
+```
+
+#### Integration with Existing Services
+
+**PermissionService:**
+- Search results scoped to user's own files only
+- No permission checks needed (ownership implies full access)
+
+**FileService & FolderService:**
+- Uses same Prisma models and selection patterns
+- Consistent response format across endpoints
+
+**Future Enhancements:**
+- Full-text search inside document content (OCR, PDF text extraction)
+- Search across shared files (with permission filtering)
+- Tag-based search (requires tag system implementation)
+- Saved searches and search history
+- Search suggestions and autocomplete
+
+---
+
+### Phase 14 — CLI / Command Interface
+
+Command-line interface for NexaDrive with full file management, authentication, and utility commands.
+
+**Installation:**
+
+```bash
+# Build the CLI
+npm run build:cli
+
+# Run CLI locally (development)
+npm run cli -- <command>
+
+# Install globally (optional)
+npm link
+nexadrive <command>
+```
+
+**Configuration:**
+
+The CLI stores authentication tokens and settings in `~/.nexadrive/config.json`.
+
+Default API URL: `http://localhost:5000/api/v1`
+
+#### Command Groups
+
+**Authentication Commands:**
+
+```bash
+nexadrive auth login              # Login to NexaDrive
+nexadrive auth register           # Register a new account
+nexadrive auth logout             # Logout from NexaDrive
+nexadrive auth whoami             # Show current user information
+```
+
+**File Commands:**
+
+```bash
+nexadrive files upload <file> [-f, --folder <folderId>]
+nexadrive files download <fileId> [-o, --output <path>]
+nexadrive files list [-f, --folder <folderId>] [-p, --page <n>] [-l, --limit <n>]
+nexadrive files delete <fileId>
+nexadrive files search <query> [-t, --type <mime>] [--min-size <bytes>] [--max-size <bytes>]
+nexadrive files info <fileId>
+```
+
+**Folder Commands:**
+
+```bash
+nexadrive folders create <name> [-p, --parent <folderId>] [-v, --visibility <type>]
+nexadrive folders list [-p, --parent <folderId>] [--page <n>] [-l, --limit <n>]
+nexadrive folders info <folderId>
+nexadrive folders delete <folderId>
+nexadrive folders rename <folderId> <newName>
+```
+
+**Utility Commands:**
+
+```bash
+nexadrive quota                   # Show storage quota information
+nexadrive recent [-l, --limit <n>]  # Show recently modified files
+nexadrive large [--min-size <bytes>] [-l, --limit <n>]  # Show largest files
+nexadrive trash [-p, --page <n>] [-l, --limit <n>]  # List items in trash
+nexadrive search <query> [-p, --page <n>] [-l, --limit <n>]  # Global search
+```
+
+#### Usage Examples
+
+**Authentication:**
+
+```bash
+# Login
+$ nexadrive auth login
+? Email: user@example.com
+? Password: ********
+✓ Logged in as user@example.com
+
+# Check current user
+$ nexadrive auth whoami
+Current User:
+  Email: user@example.com
+  Username: johndoe
+  User ID: 3fa85f64-...
+  API URL: http://localhost:5000/api/v1
+```
+
+**File Operations:**
+
+```bash
+# Upload a file
+$ nexadrive files upload ./document.pdf
+✓ File uploaded successfully: document.pdf
+ℹ File ID: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+ℹ Size: 2.45 MB
+
+# Upload to specific folder
+$ nexadrive files upload ./photo.jpg --folder 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
+
+# List files
+$ nexadrive files list --limit 5
+Files:
+
+Name                          | Size      | Type                 | Created          | ID
+------------------------------|-----------|----------------------|------------------|----------
+annual-report.pdf             | 2.45 MB   | application/pdf      | 9/20/2026, 10:00 | 3fa85f64...
+presentation.pptx             | 5.12 MB   | application/vnd.open | 9/19/2026, 14:30 | 4gb96g75...
+photo.jpg                     | 1.24 MB   | image/jpeg           | 9/18/2026, 09:15 | 5hc07h86...
+
+ℹ Page 1 of 3 (12 total)
+
+# Download a file
+$ nexadrive files download 3fa85f64-... -o ./downloads/report.pdf
+✓ File downloaded: ./downloads/report.pdf
+
+# Search files
+$ nexadrive files search "report" --type pdf
+Search Results:
+
+Name                          | Size      | Type                 | Created          | ID
+------------------------------|-----------|----------------------|------------------|----------
+annual-report.pdf             | 2.45 MB   | application/pdf      | 9/20/2026, 10:00 | 3fa85f64...
+q3-report.pdf                 | 1.87 MB   | application/pdf      | 9/15/2026, 11:20 | 6id18i97...
+
+ℹ Found 2 files (page 1 of 1)
+
+# Get file details
+$ nexadrive files info 3fa85f64-...
+File Information:
+  Name: annual-report.pdf
+  ID: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+  Size: 2.45 MB
+  MIME Type: application/pdf
+  Visibility: PRIVATE
+  Version: 1
+  Created: 9/20/2026, 10:00:00 AM
+  Updated: 9/20/2026, 10:00:00 AM
+  Owner ID: 9b1deb4d-...
+  Folder ID: 7e8f9a0b-...
+```
+
+**Folder Operations:**
+
+```bash
+# Create a folder
+$ nexadrive folders create "Projects" --visibility PRIVATE
+✓ Folder created: Projects
+ℹ Folder ID: 7e8f9a0b-...
+
+# Create subfolder
+$ nexadrive folders create "2026" --parent 7e8f9a0b-...
+
+# List folders
+$ nexadrive folders list
+Folders:
+
+Name                                | Visibility | Created          | ID
+------------------------------------|------------|------------------|----------
+Documents                           | PRIVATE    | 9/15/2026, 08:00 | 5hc07h86...
+Projects                            | PRIVATE    | 9/18/2026, 09:30 | 7e8f9a0b...
+Photos                              | SHARED     | 9/10/2026, 14:00 | 8jf19j08...
+
+ℹ Page 1 of 1 (3 total)
+
+# Get folder details
+$ nexadrive folders info 7e8f9a0b-...
+Folder Information:
+  Name: Projects
+  ID: 7e8f9a0b-...
+  Visibility: PRIVATE
+  Created: 9/18/2026, 09:30:00 AM
+  Updated: 9/18/2026, 09:30:00 AM
+  Owner ID: 9b1deb4d-...
+
+  Subfolders: 2
+    - 2026 (6id18i97...)
+    - Archive (7je29j19...)
+
+# Rename folder
+$ nexadrive folders rename 7e8f9a0b-... "Work Projects"
+✓ Folder renamed to: Work Projects
+```
+
+**Utility Commands:**
+
+```bash
+# Check quota
+$ nexadrive quota
+Storage Quota:
+  Used: 127.45 MB
+  Total: 5.00 GB
+  Available: 4.88 GB
+  Usage: 2.49%
+  Status: ✅ OK
+
+Counts:
+  Files: 42
+  Folders: 8
+  Trashed Items: 3
+
+# Recent files
+$ nexadrive recent --limit 5
+Recent Files:
+
+Name                          | Size      | Type                 | Modified         | ID
+------------------------------|-----------|----------------------|------------------|----------
+notes.txt                     | 4.12 KB   | text/plain           | 9/21/2026, 16:45 | 8jf19j08...
+report.pdf                    | 2.45 MB   | application/pdf      | 9/21/2026, 14:20 | 3fa85f64...
+photo.jpg                     | 1.24 MB   | image/jpeg           | 9/21/2026, 09:15 | 5hc07h86...
+
+# Large files
+$ nexadrive large --min-size 5000000 --limit 5
+Large Files:
+
+Name                          | Size      | Type                 | Created          | ID
+------------------------------|-----------|----------------------|------------------|----------
+video.mp4                     | 45.67 MB  | video/mp4            | 9/18/2026, 11:00 | 9kg20k20...
+presentation.pptx             | 5.12 MB   | application/vnd.open | 9/19/2026, 14:30 | 4gb96g75...
+
+ℹ Showing files larger than 4.77 MB
+
+# Global search
+$ nexadrive search "presentation"
+Files:
+
+Name                          | Size      | Type                 | ID
+------------------------------|-----------|----------------------|----------
+presentation.pptx             | 5.12 MB   | application/vnd.open | 4gb96g75...
+sales-presentation.pdf        | 3.21 MB   | application/pdf      | 7je29j19...
+
+Folders:
+
+Name                                | Visibility | ID
+------------------------------------|------------|----------
+Presentations                       | PRIVATE    | 8jf19j08...
+
+ℹ Found 3 total results (2 files, 1 folders)
+
+# List trash
+$ nexadrive trash
+Trash Items:
+
+Name                     | Type   | Deleted          | Expires          | ID
+-------------------------|--------|------------------|------------------|----------
+old-notes.txt            | file   | 9/15/2026, 10:00 | 10/15/2026, 10:0 | 6id18i97...
+Archive                  | folder | 9/10/2026, 14:00 | 10/10/2026, 14:0 | 7je29j19...
+
+ℹ Page 1 of 1 (2 total)
+```
+
+#### CLI Features
+
+**Interactive Prompts:**
+- Password masking for secure input
+- Input validation with helpful error messages
+- Confirmation prompts for destructive operations
+
+**Progress Indicators:**
+- Spinner animations for long-running operations
+- Clear success/error messages with color coding
+- Detailed operation feedback
+
+**Output Formatting:**
+- Color-coded messages (green = success, red = error, blue = info)
+- Tabular output for lists
+- Human-readable file sizes (B, KB, MB, GB)
+- Formatted dates and timestamps
+
+**Error Handling:**
+- API error messages displayed clearly
+- Network error detection
+- Authentication error handling with re-login prompts
+
+#### Configuration Management
+
+**Config File Location:**
+```
+~/.nexadrive/config.json
+```
+
+**Config Structure:**
+```json
+{
+  "apiUrl": "http://localhost:5000/api/v1",
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "9b1deb4d-...",
+    "email": "user@example.com",
+    "username": "johndoe"
+  }
+}
+```
+
+**Environment Variables:**
+
+You can override the default API URL:
+
+```bash
+# Set custom API URL in config before login
+# Or modify ~/.nexadrive/config.json directly
+```
+
+#### Development
+
+**Run CLI in development mode:**
+
+```bash
+npm run cli -- <command>
+```
+
+**Build CLI for distribution:**
+
+```bash
+npm run build:cli
+```
+
+**Install CLI globally for testing:**
+
+```bash
+npm link
+nexadrive <command>
+```
+
+**Uninstall global CLI:**
+
+```bash
+npm unlink -g nexadrive
+```
+
+#### Architecture
+
+**CLI Structure:**
+
+```
+cli/
+├── index.ts              # Main CLI entry point
+├── commands/
+│   ├── auth.ts           # Authentication commands
+│   ├── files.ts          # File operations
+│   ├── folders.ts        # Folder operations
+│   └── utils.ts          # Utility commands
+└── utils/
+    ├── config.ts         # Configuration management
+    ├── api.ts            # API client wrapper
+    └── format.ts         # Output formatting utilities
+```
+
+**Dependencies:**
+- `commander` — CLI framework and command parsing
+- `inquirer` — Interactive prompts
+- `chalk` — Terminal color output
+- `ora` — Progress spinners
+- `axios` — HTTP client for API requests
+- `form-data` — Multipart form uploads
+
+**Authentication Flow:**
+
+```
+1. User runs: nexadrive auth login
+2. CLI prompts for email and password
+3. API request to /auth/login
+4. Store accessToken, refreshToken, and user info in ~/.nexadrive/config.json
+5. Future commands use stored token in Authorization header
+```
+
+**File Upload Flow:**
+
+```
+1. User runs: nexadrive files upload ./file.pdf
+2. CLI reads file from disk
+3. Create FormData with file and optional folderId
+4. POST to /files/upload with multipart/form-data
+5. Display success message with file ID
+```
+
+**File Download Flow:**
+
+```
+1. User runs: nexadrive files download <fileId>
+2. GET file metadata from /files/:id
+3. GET file stream from /files/:id/download
+4. Pipe stream to output file
+5. Display success message with output path
+```
+
+#### Future Enhancements
+
+- **Auto-completion:** Shell completion scripts for bash/zsh
+- **Config command:** Interactive config management
+- **Batch operations:** Upload/download multiple files
+- **Progress bars:** File upload/download progress
+- **Watch mode:** Auto-upload on file changes
+- **Sync command:** Bi-directional folder sync
+- **Share commands:** Create and manage shares via CLI
+- **Version commands:** Manage file versions
+- **Interactive mode:** REPL-style interface
+- **Output formats:** JSON output for scripting
+
+---
+
+### Phase 15 — Activity Logs + Notifications
+
+Track user actions with detailed activity logs and send real-time notifications for important events.
+
+**Endpoints:**
+
+**Activities:**
+```
+GET    /api/v1/activities              # Get activities with filtering
+GET    /api/v1/activities/recent       # Get recent activities
+GET    /api/v1/activities/stats        # Get activity statistics
+```
+
+**Notifications:**
+```
+GET    /api/v1/notifications           # Get notifications
+GET    /api/v1/notifications/unread-count  # Get unread count
+PATCH  /api/v1/notifications/:id/read  # Mark as read
+PATCH  /api/v1/notifications/read-all  # Mark all as read
+DELETE /api/v1/notifications/:id       # Delete notification
+DELETE /api/v1/notifications/read      # Delete all read
+```
+
+#### Activity Logging
+
+**Activity Actions:**
+
+| Action | Description |
+|--------|-------------|
+| LOGIN | User logged in |
+| LOGOUT | User logged out |
+| UPLOAD | File uploaded |
+| DOWNLOAD | File downloaded |
+| CREATE_FOLDER | Folder created |
+| RENAME | File or folder renamed |
+| MOVE | File or folder moved |
+| COPY | File copied |
+| DELETE | File or folder moved to trash |
+| RESTORE | File or folder restored from trash |
+| SHARE | Resource shared with user/group |
+| PERMISSION_CHANGE | Permission modified |
+| INVITE | Invitation sent |
+| ACCEPT_INVITATION | Invitation accepted |
+
+**Get activities with filters:**
+
+```bash
+GET /api/v1/activities?action=UPLOAD&startDate=2026-09-01&endDate=2026-09-30&page=1&limit=20
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Activities retrieved successfully",
+  "data": [
+    {
+      "id": "3fa85f64-...",
+      "action": "UPLOAD",
+      "details": {
+        "resourceId": "7e8f9a0b-...",
+        "resourceName": "report.pdf",
+        "resourceType": "file",
+        "fileSize": 2048576
+      },
+      "ipAddress": "192.168.1.100",
+      "createdAt": "2026-09-20T10:30:00Z"
+    },
+    {
+      "id": "4gb96g75-...",
+      "action": "CREATE_FOLDER",
+      "details": {
+        "resourceId": "8jf19j08-...",
+        "resourceName": "Projects",
+        "resourceType": "folder"
+      },
+      "ipAddress": "192.168.1.100",
+      "createdAt": "2026-09-19T14:15:00Z"
+    }
+  ],
+  "meta": {
+    "total": 42,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 3
+  }
+}
+```
+
+**Get recent activities:**
+
+```bash
+GET /api/v1/activities/recent?limit=10
+```
+
+Returns the 10 most recent activities sorted by timestamp (descending).
+
+**Get activity statistics:**
+
+```bash
+GET /api/v1/activities/stats?days=7
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Activity statistics retrieved successfully",
+  "data": {
+    "totalActivities": 127,
+    "actionCounts": {
+      "LOGIN": 15,
+      "UPLOAD": 42,
+      "DOWNLOAD": 28,
+      "CREATE_FOLDER": 8,
+      "DELETE": 12,
+      "SHARE": 6
+    },
+    "dailyCounts": {
+      "2026-09-15": 18,
+      "2026-09-16": 22,
+      "2026-09-17": 15,
+      "2026-09-18": 20,
+      "2026-09-19": 25,
+      "2026-09-20": 17,
+      "2026-09-21": 10
+    },
+    "period": "7 days"
+  }
+}
+```
+
+#### Activity Details Structure
+
+Each activity includes a `details` JSON field with action-specific information:
+
+**Upload Activity:**
+```json
+{
+  "resourceId": "file-uuid",
+  "resourceName": "document.pdf",
+  "resourceType": "file",
+  "fileSize": 2048576,
+  "mimeType": "application/pdf",
+  "folderId": "folder-uuid"
+}
+```
+
+**Share Activity:**
+```json
+{
+  "resourceId": "file-or-folder-uuid",
+  "resourceName": "Report 2026",
+  "resourceType": "file",
+  "shareWith": "john@example.com",
+  "permission": "EDIT"
+}
+```
+
+**Move Activity:**
+```json
+{
+  "resourceId": "file-uuid",
+  "resourceName": "photo.jpg",
+  "resourceType": "file",
+  "fromPath": "/Documents/Photos",
+  "toPath": "/Archive/2026"
+}
+```
+
+**Delete Activity:**
+```json
+{
+  "resourceId": "folder-uuid",
+  "resourceName": "Old Projects",
+  "resourceType": "folder",
+  "deletedItems": 12
+}
+```
+
+#### Notifications
+
+**Notification Types:**
+
+| Type | Description |
+|------|-------------|
+| SHARE | Resource shared with you |
+| DOWNLOAD | Someone downloaded your file |
+| QUOTA_ALERT | Storage quota warning/critical alert |
+| INVITATION | Invitation to access a resource |
+| PERMISSION_CHANGE | Your permissions changed |
+| FILE_UPLOADED | New file uploaded to shared folder |
+| COMMENT | Comment on your resource |
+
+**Get notifications:**
+
+```bash
+GET /api/v1/notifications?page=1&limit=20&unreadOnly=true
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Notifications retrieved successfully",
+  "data": [
+    {
+      "id": "9kg20k20-...",
+      "title": "New Share",
+      "message": "John Doe shared a file \"Q3 Report.pdf\" with you",
+      "type": "SHARE",
+      "isRead": false,
+      "createdAt": "2026-09-21T10:30:00Z"
+    },
+    {
+      "id": "0lh31l31-...",
+      "title": "Storage Warning",
+      "message": "Your storage is 85% full. Consider cleaning up files.",
+      "type": "QUOTA_ALERT",
+      "isRead": false,
+      "createdAt": "2026-09-20T08:00:00Z"
+    }
+  ],
+  "meta": {
+    "total": 8,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
+}
+```
+
+**Get unread count:**
+
+```bash
+GET /api/v1/notifications/unread-count
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Unread count retrieved successfully",
+  "data": {
+    "count": 8
+  }
+}
+```
+
+**Mark notification as read:**
+
+```bash
+PATCH /api/v1/notifications/9kg20k20-.../read
+```
+
+**Mark all as read:**
+
+```bash
+PATCH /api/v1/notifications/read-all
+```
+
+Returns the count of notifications marked as read.
+
+**Delete notification:**
+
+```bash
+DELETE /api/v1/notifications/9kg20k20-...
+```
+
+**Delete all read notifications:**
+
+```bash
+DELETE /api/v1/notifications/read
+```
+
+Returns the count of deleted notifications.
+
+#### Notification Helpers
+
+The `NotificationService` provides helper methods to create common notifications:
+
+**Share notification:**
+```typescript
+NotificationService.notifyShare(
+  recipientId,
+  'John Doe',
+  'Q3 Report.pdf',
+  'file'
+);
+```
+
+**Download notification:**
+```typescript
+NotificationService.notifyDownload(
+  ownerId,
+  'Jane Smith',
+  'document.pdf'
+);
+```
+
+**Quota alert:**
+```typescript
+NotificationService.notifyQuotaAlert(
+  userId,
+  85.5, // usage percent
+  'warning' // or 'critical'
+);
+```
+
+**Invitation notification:**
+```typescript
+NotificationService.notifyInvitation(
+  recipientId,
+  'Admin User',
+  'Projects Folder',
+  'folder'
+);
+```
+
+#### Activity Logging Integration
+
+Activities are automatically logged for key operations:
+
+**Already Integrated:**
+- ✅ Login (LOGIN action)
+- ✅ Registration (REGISTER action - custom action, not in enum)
+
+**Ready to Integrate:**
+
+Call `ActivityService.logActivity()` from any service:
+
+```typescript
+import { ActivityService, ActivityAction } from '../services/activity.service';
+
+// Log file upload
+await ActivityService.logActivity(
+  userId,
+  ActivityAction.UPLOAD,
+  {
+    resourceId: file.id,
+    resourceName: file.name,
+    resourceType: 'file',
+    fileSize: file.size,
+  },
+  req.ip
+);
+
+// Log folder creation
+await ActivityService.logActivity(
+  userId,
+  ActivityAction.CREATE_FOLDER,
+  {
+    resourceId: folder.id,
+    resourceName: folder.name,
+    resourceType: 'folder',
+  }
+);
+
+// Log share operation
+await ActivityService.logActivity(
+  userId,
+  ActivityAction.SHARE,
+  {
+    resourceId: share.resourceId,
+    resourceName: resourceName,
+    resourceType: share.resourceType,
+    shareWith: recipientEmail,
+    permission: share.permission,
+  }
+);
+```
+
+#### Activity Filters
+
+**Filter by action:**
+```bash
+GET /api/v1/activities?action=UPLOAD
+```
+
+**Filter by date range:**
+```bash
+GET /api/v1/activities?startDate=2026-09-01&endDate=2026-09-30
+```
+
+**Combine filters:**
+```bash
+GET /api/v1/activities?action=SHARE&startDate=2026-09-15&page=1&limit=10
+```
+
+#### Notification Workflow
+
+```
+User Action (e.g., share file)
+  ↓
+Service completes operation
+  ↓
+NotificationService.notifyShare() called
+  ↓
+Notification record created in database
+  ↓
+Recipient sees notification badge (unread count)
+  ↓
+GET /api/v1/notifications (recipient)
+  ↓
+User clicks notification → PATCH /mark as read
+  ↓
+Badge count decreases
+```
+
+#### Activity Data Retention
+
+**Cleanup old activities:**
+
+The `ActivityService.deleteOldActivities(days)` method removes activities older than the specified days:
+
+```typescript
+// Delete activities older than 90 days
+const deletedCount = await ActivityService.deleteOldActivities(90);
+```
+
+**Recommended retention:**
+- **Development:** 30 days
+- **Production:** 90-365 days (depending on compliance requirements)
+
+Can be run as a scheduled job (cron) for automatic cleanup.
+
+#### Access Control
+
+**Activities:**
+- Users can only view their own activities
+- No cross-user activity viewing
+- Admins could be given access to all activities (not currently implemented)
+
+**Notifications:**
+- Users can only view/manage their own notifications
+- Notifications are user-scoped by design
+- No sharing or forwarding of notifications
+
+#### Use Cases
+
+**Activity Logs:**
+- **Audit trail:** Track all user actions for security/compliance
+- **Debugging:** Investigate user-reported issues
+- **Analytics:** Understand user behavior patterns
+- **Dashboard widgets:** Show recent user activity
+
+**Notifications:**
+- **Collaboration alerts:** Notify when files are shared
+- **Download tracking:** Notify owners when files are downloaded
+- **Storage management:** Alert users when quota is near full
+- **Invitation workflow:** Notify users of pending invitations
+
+#### Performance Considerations
+
+**Activity Logging:**
+- Logging is **non-blocking** (errors don't break main operations)
+- Uses `try-catch` to prevent logging failures from affecting user actions
+- Indexed on `userId` and `createdAt` for fast queries
+
+**Notifications:**
+- Paginated results (default 20, max 100 per page)
+- Unread count is efficient (`COUNT` query with `WHERE isRead = false`)
+- Batch operations (mark all as read, delete all read) for efficiency
+
+#### Future Enhancements
+
+**Activities:**
+- **Real-time activity feed:** WebSocket updates for live activity stream
+- **Export activities:** Download activity logs as CSV/JSON
+- **Advanced filtering:** Filter by resource type, IP address
+- **Activity search:** Full-text search across activity details
+
+**Notifications:**
+- **Real-time notifications:** WebSocket push notifications
+- **Email notifications:** Send email for critical alerts
+- **Notification preferences:** User-configurable notification settings
+- **Notification grouping:** Combine similar notifications
+- **Action buttons:** Quick actions directly from notification (approve/deny)
+
+---
+
 ## Architecture
 
 ```
@@ -1452,10 +2677,10 @@ Response
 | 10 | Trash + Recovery | ✅ Done |
 | 11 | File Versioning | ✅ Done |
 | 12 | ZIP Compression + Extraction | ✅ Done |
-| 13 | Search | ⏳ Next |
-| 14 | CLI / Command Interface | ⏳ Planned |
-| 15 | Activity Logs + Notifications | ⏳ Planned |
-| 16 | Admin System | ⏳ Planned |
+| 13 | Search | ✅ Done |
+| 14 | CLI / Command Interface | ✅ Done |
+| 15 | Activity Logs + Notifications | ✅ Done |
+| 16 | Admin System | ⏳ Next |
 | 17 | Real-Time Socket.IO | ⏳ Planned |
 | 18 | Payments + Storage Upgrades | ⏳ Planned |
 | 19 | Security + Testing | ⏳ Planned |
