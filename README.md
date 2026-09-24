@@ -2629,6 +2629,555 @@ Can be run as a scheduled job (cron) for automatic cleanup.
 
 ---
 
+### Phase 16 — Admin System & Management
+
+Comprehensive administrator dashboard for user management, system monitoring, and platform administration.
+
+**Endpoints:**
+
+**User Management:**
+```
+GET    /api/v1/admin/users              # List all users (paginated + filters)
+GET    /api/v1/admin/users/:userId      # Get detailed user information
+PUT    /api/v1/admin/users/:userId/role # Update user role (promote/demote)
+PUT    /api/v1/admin/users/:userId/status # Suspend or activate user
+PUT    /api/v1/admin/users/:userId/quota  # Update storage quota
+DELETE /api/v1/admin/users/:userId      # Delete user permanently
+```
+
+**Statistics & Monitoring:**
+```
+GET    /api/v1/admin/stats/system       # System-wide statistics
+GET    /api/v1/admin/stats/storage      # Storage breakdown & top users
+GET    /api/v1/admin/stats/activity     # Activity statistics by time period
+GET    /api/v1/admin/activities         # Recent system activities (all users)
+```
+
+**System Maintenance:**
+```
+POST   /api/v1/admin/cleanup            # Clean up old data (trash, logs, tokens)
+```
+
+#### Authentication & Authorization
+
+All admin endpoints require:
+1. **Authentication:** Valid JWT token (`authenticateUser` middleware)
+2. **Admin Role:** User must have `role: ADMIN` (`requireAdmin` middleware)
+
+**Access denied for non-admin users:**
+```json
+{
+  "success": false,
+  "message": "Access denied. Administrator privileges required.",
+  "data": null
+}
+```
+
+#### User Management
+
+**List all users with filters:**
+
+```bash
+GET /api/v1/admin/users?page=1&limit=20&role=USER&isActive=true&search=john
+```
+
+**Query Parameters:**
+- `page` (optional): Page number (default: 1)
+- `limit` (optional): Items per page, max 100 (default: 20)
+- `role` (optional): Filter by role (`USER` or `ADMIN`)
+- `isActive` (optional): Filter by active status (`true` or `false`)
+- `search` (optional): Search by email, username, or name
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Users retrieved successfully",
+  "data": {
+    "users": [
+      {
+        "id": "550e8400-...",
+        "name": "John Doe",
+        "email": "john@example.com",
+        "username": "johndoe",
+        "avatar": "https://...",
+        "role": "USER",
+        "isActive": true,
+        "isEmailVerified": true,
+        "storageQuota": "549755813888",
+        "usedStorage": "104857600",
+        "createdAt": "2026-01-15T10:30:00Z",
+        "updatedAt": "2026-09-20T14:22:00Z",
+        "_count": {
+          "files": 42,
+          "folders": 8,
+          "activityLogs": 127
+        }
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 156,
+      "totalPages": 8
+    }
+  }
+}
+```
+
+**Get detailed user information:**
+
+```bash
+GET /api/v1/admin/users/550e8400-...
+```
+
+Returns comprehensive user details including:
+- Basic profile information
+- Storage usage and quota
+- Counts of files, folders, shares, groups, activities, notifications
+- Active subscription details (if any)
+
+**Update user role (promote/demote):**
+
+```bash
+PUT /api/v1/admin/users/550e8400-.../role
+Content-Type: application/json
+
+{
+  "role": "ADMIN"
+}
+```
+
+**Roles:**
+- `USER` — Standard user with normal permissions
+- `ADMIN` — Administrator with full system access
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "User role updated to ADMIN",
+  "data": {
+    "id": "550e8400-...",
+    "email": "john@example.com",
+    "username": "johndoe",
+    "role": "ADMIN",
+    "updatedAt": "2026-09-21T11:45:00Z"
+  }
+}
+```
+
+**Suspend or activate user account:**
+
+```bash
+PUT /api/v1/admin/users/550e8400-.../status
+Content-Type: application/json
+
+{
+  "isActive": false
+}
+```
+
+Set `isActive: false` to suspend the account (user cannot log in), `true` to reactivate.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "User account suspended successfully",
+  "data": {
+    "id": "550e8400-...",
+    "email": "john@example.com",
+    "username": "johndoe",
+    "isActive": false,
+    "updatedAt": "2026-09-21T11:50:00Z"
+  }
+}
+```
+
+**Update user storage quota:**
+
+```bash
+PUT /api/v1/admin/users/550e8400-.../quota
+Content-Type: application/json
+
+{
+  "quotaGB": 100
+}
+```
+
+**Quota limits:**
+- Minimum: 0.001 GB (1 MB)
+- Maximum: 10000 GB (10 TB)
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "User storage quota updated successfully",
+  "data": {
+    "id": "550e8400-...",
+    "email": "john@example.com",
+    "username": "johndoe",
+    "storageQuota": "107374182400",
+    "usedStorage": "104857600",
+    "quotaGB": 100,
+    "updatedAt": "2026-09-21T12:00:00Z"
+  }
+}
+```
+
+**Delete user permanently:**
+
+```bash
+DELETE /api/v1/admin/users/550e8400-...
+```
+
+⚠️ **Warning:** This permanently deletes:
+- User account
+- All files and folders owned by the user
+- All shares, permissions, and group memberships
+- All activity logs and notifications
+- All subscriptions and payment records
+
+**Safety:** Admins cannot delete their own account.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "User account deleted permanently",
+  "data": {
+    "id": "550e8400-...",
+    "email": "john@example.com",
+    "username": "johndoe"
+  }
+}
+```
+
+#### System Statistics
+
+**Get system-wide statistics:**
+
+```bash
+GET /api/v1/admin/stats/system
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "System statistics retrieved successfully",
+  "data": {
+    "users": {
+      "total": 1247,
+      "active": 1189,
+      "inactive": 58,
+      "admins": 3
+    },
+    "content": {
+      "files": 45892,
+      "folders": 8734
+    },
+    "storage": {
+      "totalUsed": "5497558138880",
+      "totalUsedGB": 5120.5
+    },
+    "collaboration": {
+      "groups": 127,
+      "shares": 3456
+    },
+    "activities": 89234,
+    "recentUsers": [
+      {
+        "id": "...",
+        "email": "newuser@example.com",
+        "username": "newuser",
+        "createdAt": "2026-09-21T10:00:00Z"
+      }
+    ]
+  }
+}
+```
+
+**Get storage statistics:**
+
+```bash
+GET /api/v1/admin/stats/storage
+```
+
+Returns:
+- **Top 10 users** by storage usage with percentage
+- **File type distribution** (MIME type breakdown with counts and sizes)
+- **Total statistics** (total files, total size, average file size)
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Storage statistics retrieved successfully",
+  "data": {
+    "topUsers": [
+      {
+        "id": "...",
+        "email": "poweruser@example.com",
+        "username": "poweruser",
+        "usedStorage": "524288000000",
+        "storageQuota": "549755813888",
+        "usagePercentage": 95.4,
+        "_count": {
+          "files": 1247
+        }
+      }
+    ],
+    "fileTypes": [
+      {
+        "mimeType": "video/mp4",
+        "count": "342",
+        "totalSize": "157286400000",
+        "totalSizeMB": 150000
+      },
+      {
+        "mimeType": "image/jpeg",
+        "count": "5621",
+        "totalSize": "52428800000",
+        "totalSizeMB": 50000
+      },
+      {
+        "mimeType": "application/pdf",
+        "count": "1892",
+        "totalSize": "20971520000",
+        "totalSizeMB": 20000
+      }
+    ],
+    "totals": {
+      "totalFiles": 45892,
+      "totalSize": "5497558138880",
+      "totalSizeGB": 5120.5,
+      "averageFileSize": 119825408,
+      "averageFileSizeMB": 114.3
+    }
+  }
+}
+```
+
+**Get activity statistics:**
+
+```bash
+GET /api/v1/admin/stats/activity?days=7
+```
+
+**Query Parameters:**
+- `days` (optional): Time period in days, 1-365 (default: 7)
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Activity statistics retrieved successfully",
+  "data": {
+    "period": {
+      "days": 7,
+      "startDate": "2026-09-14T00:00:00Z",
+      "endDate": "2026-09-21T00:00:00Z"
+    },
+    "byAction": [
+      {
+        "action": "UPLOAD",
+        "count": "1247"
+      },
+      {
+        "action": "DOWNLOAD",
+        "count": "892"
+      },
+      {
+        "action": "LOGIN",
+        "count": "456"
+      },
+      {
+        "action": "SHARE",
+        "count": "234"
+      }
+    ],
+    "byDay": [
+      {
+        "date": "2026-09-15",
+        "count": "342"
+      },
+      {
+        "date": "2026-09-16",
+        "count": "398"
+      },
+      {
+        "date": "2026-09-17",
+        "count": "287"
+      }
+    ],
+    "topUsers": [
+      {
+        "user": {
+          "id": "...",
+          "email": "activeuser@example.com",
+          "username": "activeuser"
+        },
+        "activityCount": 127
+      }
+    ]
+  }
+}
+```
+
+**Get recent system activities:**
+
+```bash
+GET /api/v1/admin/activities?limit=50
+```
+
+Returns recent activities from **all users** across the system (admin view).
+
+**Query Parameters:**
+- `limit` (optional): Number of activities, 1-200 (default: 50)
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Recent activities retrieved successfully",
+  "data": [
+    {
+      "id": "...",
+      "userId": "...",
+      "action": "UPLOAD",
+      "details": {
+        "resourceId": "...",
+        "resourceName": "report.pdf",
+        "resourceType": "file"
+      },
+      "ipAddress": "192.168.1.100",
+      "createdAt": "2026-09-21T11:30:00Z",
+      "user": {
+        "id": "...",
+        "email": "user@example.com",
+        "username": "user123"
+      }
+    }
+  ]
+}
+```
+
+#### System Maintenance
+
+**Clean up old data:**
+
+```bash
+POST /api/v1/admin/cleanup?daysOld=30
+```
+
+Removes:
+- **Trash items** older than threshold (permanently deleted)
+- **Activity logs** older than threshold
+- **Expired refresh tokens**
+
+**Query Parameters:**
+- `daysOld` (optional): Delete data older than this many days, 7-365 (default: 30)
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Old data cleaned up successfully",
+  "data": {
+    "deletedTrashItems": 127,
+    "deletedActivities": 5432,
+    "deletedExpiredTokens": 89,
+    "cutoffDate": "2026-08-22T00:00:00Z"
+  }
+}
+```
+
+#### Admin Use Cases
+
+**1. Monitor System Health:**
+```bash
+# Get overview
+GET /api/v1/admin/stats/system
+
+# Check storage usage
+GET /api/v1/admin/stats/storage
+
+# Review recent activity
+GET /api/v1/admin/stats/activity?days=7
+```
+
+**2. Manage Problem Users:**
+```bash
+# Find inactive users
+GET /api/v1/admin/users?isActive=false
+
+# Find users over quota
+GET /api/v1/admin/stats/storage
+# (check topUsers with usagePercentage > 95)
+
+# Suspend user
+PUT /api/v1/admin/users/{userId}/status
+{ "isActive": false }
+```
+
+**3. Promote Team Members:**
+```bash
+# Search for user
+GET /api/v1/admin/users?search=john@company.com
+
+# Promote to admin
+PUT /api/v1/admin/users/{userId}/role
+{ "role": "ADMIN" }
+```
+
+**4. Adjust Storage Plans:**
+```bash
+# Get user details
+GET /api/v1/admin/users/{userId}
+
+# Increase quota
+PUT /api/v1/admin/users/{userId}/quota
+{ "quotaGB": 1000 }
+```
+
+**5. System Maintenance:**
+```bash
+# Review activity trends
+GET /api/v1/admin/stats/activity?days=30
+
+# Clean up old data
+POST /api/v1/admin/cleanup?daysOld=90
+
+# Monitor recent actions
+GET /api/v1/admin/activities?limit=100
+```
+
+#### Security Notes
+
+- ✅ All admin endpoints require `ADMIN` role
+- ✅ Admin middleware prevents privilege escalation
+- ✅ Admins cannot delete their own accounts
+- ✅ User deletions cascade properly (Prisma handles relations)
+- ✅ All operations are logged in activity logs
+- ⚠️ Admin access should be restricted to trusted personnel
+- ⚠️ Consider implementing 2FA for admin accounts (future enhancement)
+- ⚠️ Audit admin actions regularly via activity logs
+
+---
+
 ## Architecture
 
 ```
@@ -2680,8 +3229,8 @@ Response
 | 13 | Search | ✅ Done |
 | 14 | CLI / Command Interface | ✅ Done |
 | 15 | Activity Logs + Notifications | ✅ Done |
-| 16 | Admin System | ⏳ Next |
-| 17 | Real-Time Socket.IO | ⏳ Planned |
+| 16 | Admin System | ✅ Done |
+| 17 | Real-Time Socket.IO | ⏳ Next |
 | 18 | Payments + Storage Upgrades | ⏳ Planned |
 | 19 | Security + Testing | ⏳ Planned |
 | 20 | Production Deployment | ⏳ Planned |
