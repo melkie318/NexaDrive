@@ -10,8 +10,8 @@ import {
 /**
  * @swagger
  * tags:
- *   name: Shares
- *   description: Direct and group-based resource sharing
+ *   name: Sharing
+ *   description: Direct file and folder sharing with users and groups
  */
 
 export class ShareController {
@@ -20,7 +20,7 @@ export class ShareController {
    * /api/v1/shares/direct:
    *   post:
    *     summary: Share a resource (file or folder) with a specific user
-   *     tags: [Shares]
+   *     tags: [Sharing]
    *     security:
    *       - bearerAuth: []
    *     requestBody:
@@ -59,7 +59,7 @@ export class ShareController {
    * /api/v1/shares/group:
    *   post:
    *     summary: Share a resource (file or folder) with a group
-   *     tags: [Shares]
+   *     tags: [Sharing]
    *     security:
    *       - bearerAuth: []
    *     requestBody:
@@ -98,7 +98,7 @@ export class ShareController {
    * /api/v1/shares/my:
    *   get:
    *     summary: List resources I have shared with others
-   *     tags: [Shares]
+   *     tags: [Sharing]
    *     security:
    *       - bearerAuth: []
    *     responses:
@@ -119,7 +119,7 @@ export class ShareController {
    * /api/v1/shares/with-me:
    *   get:
    *     summary: List resources shared with me by others
-   *     tags: [Shares]
+   *     tags: [Sharing]
    *     security:
    *       - bearerAuth: []
    *     responses:
@@ -140,7 +140,7 @@ export class ShareController {
    * /api/v1/shares/{shareId}:
    *   delete:
    *     summary: Revoke a share (remove permission)
-   *     tags: [Shares]
+   *     tags: [Sharing]
    *     security:
    *       - bearerAuth: []
    *     parameters:

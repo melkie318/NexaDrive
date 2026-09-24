@@ -18,6 +18,9 @@ import invitationRoutes from "./routes/invitation.routes";
 import trashRoutes from "./routes/trash.routes";
 import versionRoutes from "./routes/version.routes";
 import zipRoutes from "./routes/zip.routes";
+import searchRoutes from "./routes/search.routes";
+import activityRoutes from "./routes/activity.routes";
+import notificationRoutes from "./routes/notification.routes";
 import { errorHandler } from "./middlewares/errorHandler";
 import { notFound } from "./middlewares/notFound";
 
@@ -51,6 +54,9 @@ app.use("/api/v1/invitations", invitationRoutes);
 app.use("/api/v1/trash", trashRoutes);
 app.use("/api/v1", versionRoutes);
 app.use("/api/v1/zip", zipRoutes);
+app.use("/api/v1/search", searchRoutes);
+app.use("/api/v1/activities", activityRoutes);
+app.use("/api/v1/notifications", notificationRoutes);
 
 // 404 & Global Error Handling
 app.use(notFound);
