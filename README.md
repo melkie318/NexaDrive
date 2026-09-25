@@ -3729,6 +3729,701 @@ socket-io-client http://localhost:5000 \
 
 ---
 
+### Phase 18 — Payments + Storage Upgrades
+
+Complete payment processing system with Chapa integration, storage plan management, and subscription lifecycle.
+
+**Payment Flow:**
+```
+User selects plan → Initialize payment → Redirect to Chapa → User pays → 
+Webhook callback → Verify payment → Create subscription → Update quota
+```
+
+#### Storage Plans
+
+**Available Plans (Default Seed):**
+
+| Plan | Price (ETB) | Storage | Features |
+|------|-------------|---------|----------|
+| Free | 0 | 5 GB | Basic storage, file sharing |
+| Premium | 199/month | 100 GB | Priority support, version history |
+| Business | 499/month | 1 TB | Team collaboration, admin panel |
+
+**Endpoints:**
+
+```bash
+# Get all plans
+GET /api/v1/plans
+
+# Get plan by ID
+GET /api/v1/plans/:planId
+
+# Get default plan
+GET /api/v1/plans/default
+
+# Create plan (Admin)
+POST /api/v1/plans
+
+# Update plan (Admin)
+PUT /api/v1/plans/:planId
+
+# Delete plan (Admin)
+DELETE /api/v1/plans/:planId
+
+# Seed default plans (Admin)
+POST /api/v1/plans/seed/defaults
+```
+
+**Get all plans:**
+
+```bash
+GET /api/v1/plans
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Storage plans retrieved successfully",
+  "data": [
+    {
+      "id": "550e8400-...",
+      "name": "Free",
+      "priceETB": 0,
+      "quotaGB": 5,
+      "isDefault": true,
+      "subscriberCount": 1247
+    },
+    {
+      "id": "660f9511-...",
+      "name": "Premium",
+      "priceETB": 199,
+      "quotaGB": 100,
+      "isDefault": false,
+      "subscriberCount": 89
+    },
+    {
+      "id": "770ga622-...",
+      "name": "Business",
+      "priceETB": 499,
+      "quotaGB": 1024,
+      "isDefault": false,
+      "subscriberCount": 15
+    }
+  ]
+}
+```
+
+**Create plan (Admin only):**
+
+```bash
+POST /api/v1/plans
+Authorization: Bearer <admin_token>
+Content-Type: application/json
+
+{
+  "name": "Enterprise",
+  "priceETB": 999,
+  "quotaGB": 5120,
+  "isDefault": false
+}
+```
+
+#### Payments
+
+**Payment Process:**
+
+**1. Initialize Payment:**
+
+```bash
+POST /api/v1/payments/initialize
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "planId": "660f9511-...",
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "john@example.com",
+  "durationMonths": 1,
+  "returnUrl": "https://myapp.com/payment/success"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Payment initialized successfully",
+  "data": {
+    "paymentId": "abc123-...",
+    "txRef": "NEX-1695123456789-550e8400",
+    "checkoutUrl": "https://checkout.chapa.co/checkout/web/payment/NEX-...",
+    "amount": 199,
+    "currency": "ETB",
+    "plan": {
+      "id": "660f9511-...",
+      "name": "Premium",
+      "priceETB": 199
+    }
+  }
+}
+```
+
+**Usage:**
+```javascript
+// Redirect user to checkout URL
+window.location.href = data.checkoutUrl;
+
+// Or open in popup/iframe
+window.open(data.checkoutUrl, 'Chapa Payment', 'width=800,height=600');
+```
+
+**2. Verify Payment:**
+
+After payment, Chapa redirects to `returnUrl` with `tx_ref` query parameter.
+
+```bash
+GET /api/v1/payments/verify?txRef=NEX-1695123456789-550e8400
+Authorization: Bearer <token>
+```
+
+**Response (Success):**
+
+```json
+{
+  "success": true,
+  "message": "Payment verified and subscription activated",
+  "data": {
+    "status": "SUCCESS",
+    "payment": {
+      "id": "abc123-...",
+      "txRef": "NEX-1695123456789-550e8400",
+      "amount": 199,
+      "status": "SUCCESS"
+    },
+    "subscription": {
+      "id": "def456-...",
+      "planName": "Premium",
+      "startDate": "2026-09-21T10:00:00Z",
+      "endDate": "2026-10-21T10:00:00Z"
+    }
+  }
+}
+```
+
+**3. Webhook Handler:**
+
+Chapa automatically sends webhook to `/api/v1/payments/webhook` for payment status updates.
+
+```bash
+POST /api/v1/payments/webhook
+# No auth required (validates from Chapa)
+Content-Type: application/json
+
+{
+  "tx_ref": "NEX-1695123456789-550e8400",
+  "status": "success",
+  "amount": "199",
+  "currency": "ETB",
+  "meta": {
+    "userId": "550e8400-...",
+    "planId": "660f9511-...",
+    "durationMonths": 1
+  }
+}
+```
+
+**Get payment history:**
+
+```bash
+GET /api/v1/payments?page=1&limit=20
+Authorization: Bearer <token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Payment history retrieved successfully",
+  "data": [
+    {
+      "id": "abc123-...",
+      "txRef": "NEX-1695123456789-550e8400",
+      "amount": 199,
+      "currency": "ETB",
+      "status": "SUCCESS",
+      "provider": "CHAPA",
+      "createdAt": "2026-09-21T10:00:00Z",
+      "subscription": {
+        "id": "def456-...",
+        "planName": "Premium",
+        "startDate": "2026-09-21T10:00:00Z",
+        "endDate": "2026-10-21T10:00:00Z"
+      }
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "limit": 20,
+    "total": 3,
+    "totalPages": 1
+  }
+}
+```
+
+**Get payment stats (Admin):**
+
+```bash
+GET /api/v1/payments/stats
+Authorization: Bearer <admin_token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Payment statistics retrieved successfully",
+  "data": {
+    "total": 342,
+    "successful": 315,
+    "failed": 19,
+    "pending": 8,
+    "revenue": {
+      "total": 62685,
+      "byProvider": [
+        {
+          "provider": "CHAPA",
+          "amount": 62685,
+          "count": 315
+        }
+      ]
+    }
+  }
+}
+```
+
+#### Subscriptions
+
+**Subscription States:**
+- `ACTIVE` - Subscription is active and valid
+- `CANCELED` - User canceled subscription
+- `EXPIRED` - Subscription period ended
+- `PAST_DUE` - Payment failed (future)
+
+**Endpoints:**
+
+```bash
+# Create subscription (after payment)
+POST /api/v1/subscriptions
+
+# Get current subscription
+GET /api/v1/subscriptions/current
+
+# Get subscription history
+GET /api/v1/subscriptions/history
+
+# Cancel subscription
+POST /api/v1/subscriptions/:subscriptionId/cancel
+
+# Upgrade subscription
+POST /api/v1/subscriptions/upgrade
+
+# Renew subscription
+POST /api/v1/subscriptions/:subscriptionId/renew
+
+# Get stats (Admin)
+GET /api/v1/subscriptions/stats
+
+# Check expired (Admin/Cron)
+POST /api/v1/subscriptions/check-expired
+```
+
+**Get current subscription:**
+
+```bash
+GET /api/v1/subscriptions/current
+Authorization: Bearer <token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Current subscription retrieved successfully",
+  "data": {
+    "id": "def456-...",
+    "userId": "550e8400-...",
+    "planId": "660f9511-...",
+    "status": "ACTIVE",
+    "startDate": "2026-09-21T10:00:00Z",
+    "endDate": "2026-10-21T10:00:00Z",
+    "plan": {
+      "id": "660f9511-...",
+      "name": "Premium",
+      "priceETB": 199,
+      "quotaGB": 100
+    }
+  }
+}
+```
+
+**Cancel subscription:**
+
+```bash
+POST /api/v1/subscriptions/def456-.../cancel
+Authorization: Bearer <token>
+```
+
+User is reverted to Free plan quota after cancellation.
+
+**Upgrade subscription:**
+
+```bash
+POST /api/v1/subscriptions/upgrade
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "newPlanId": "770ga622-..."
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Subscription upgraded successfully",
+  "data": {
+    "id": "ghi789-...",
+    "userId": "550e8400-...",
+    "planId": "770ga622-...",
+    "status": "ACTIVE",
+    "startDate": "2026-09-21T10:30:00Z",
+    "endDate": "2026-11-21T10:30:00Z",
+    "plan": {
+      "id": "770ga622-...",
+      "name": "Business",
+      "priceETB": 499,
+      "quotaGB": 1024
+    }
+  }
+}
+```
+
+**Renew subscription:**
+
+```bash
+POST /api/v1/subscriptions/def456-.../renew
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "durationMonths": 3
+}
+```
+
+Extends subscription by 3 months from current end date.
+
+**Get subscription stats (Admin):**
+
+```bash
+GET /api/v1/subscriptions/stats
+Authorization: Bearer <admin_token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Subscription statistics retrieved successfully",
+  "data": {
+    "total": 1351,
+    "active": 1247,
+    "canceled": 89,
+    "expired": 15,
+    "byPlan": [
+      {
+        "planId": "550e8400-...",
+        "planName": "Free",
+        "count": 1143
+      },
+      {
+        "planId": "660f9511-...",
+        "planName": "Premium",
+        "count": 89
+      },
+      {
+        "planId": "770ga622-...",
+        "planName": "Business",
+        "count": 15
+      }
+    ]
+  }
+}
+```
+
+#### Integration Examples
+
+**Complete Payment Flow (React):**
+
+```typescript
+import axios from 'axios';
+
+const PlanUpgrade = () => {
+  const [plans, setPlans] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    // Fetch available plans
+    axios.get('/api/v1/plans')
+      .then(res => setPlans(res.data.data));
+  }, []);
+
+  const handlePurchase = async (planId: string) => {
+    setLoading(true);
+    
+    try {
+      // Initialize payment
+      const response = await axios.post('/api/v1/payments/initialize', {
+        planId,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        durationMonths: 1,
+        returnUrl: window.location.origin + '/payment/success'
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      // Redirect to Chapa checkout
+      window.location.href = response.data.data.checkoutUrl;
+    } catch (error) {
+      toast.error('Payment initialization failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="plans">
+      {plans.map(plan => (
+        <PlanCard 
+          key={plan.id}
+          plan={plan}
+          onPurchase={() => handlePurchase(plan.id)}
+          loading={loading}
+        />
+      ))}
+    </div>
+  );
+};
+```
+
+**Payment Success Handler:**
+
+```typescript
+const PaymentSuccess = () => {
+  const [searchParams] = useSearchParams();
+  const txRef = searchParams.get('tx_ref');
+
+  useEffect(() => {
+    const verifyPayment = async () => {
+      try {
+        const response = await axios.get(
+          `/api/v1/payments/verify?txRef=${txRef}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        if (response.data.data.status === 'SUCCESS') {
+          toast.success('Payment successful! Your subscription is now active.');
+          // Refresh user quota
+          fetchUserProfile();
+          // Redirect to dashboard
+          navigate('/dashboard');
+        } else {
+          toast.error('Payment verification failed');
+          navigate('/plans');
+        }
+      } catch (error) {
+        toast.error('Payment verification error');
+        navigate('/plans');
+      }
+    };
+
+    if (txRef) {
+      verifyPayment();
+    }
+  }, [txRef]);
+
+  return <div>Verifying payment...</div>;
+};
+```
+
+**Check Current Subscription:**
+
+```typescript
+const SubscriptionStatus = () => {
+  const [subscription, setSubscription] = useState(null);
+
+  useEffect(() => {
+    axios.get('/api/v1/subscriptions/current', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(res => setSubscription(res.data.data))
+      .catch(err => {
+        if (err.response?.status === 404) {
+          // No active subscription (Free plan)
+          setSubscription(null);
+        }
+      });
+  }, []);
+
+  if (!subscription) {
+    return <div>Free Plan - <Link to="/plans">Upgrade</Link></div>;
+  }
+
+  const daysRemaining = Math.ceil(
+    (new Date(subscription.endDate) - new Date()) / (1000 * 60 * 60 * 24)
+  );
+
+  return (
+    <div>
+      <h3>{subscription.plan.name} Plan</h3>
+      <p>Storage: {subscription.plan.quotaGB} GB</p>
+      <p>Expires in: {daysRemaining} days</p>
+      <button onClick={handleCancel}>Cancel Subscription</button>
+    </div>
+  );
+};
+```
+
+#### Chapa Configuration
+
+**Environment Variables:**
+
+```env
+# .env
+CHAPA_SECRET_KEY=your_chapa_secret_key
+CHAPA_API_URL=https://api.chapa.co/v1
+API_URL=https://yourdomain.com
+CLIENT_URL=https://yourdomain.com
+```
+
+**Test Mode:**
+
+Chapa provides test credentials for development:
+- Test Secret Key: `CHASECK_TEST-...`
+- Test Card Numbers: Available in Chapa documentation
+- Use test mode for development and staging
+
+**Production Setup:**
+
+1. Register at [chapa.co](https://chapa.co)
+2. Complete business verification
+3. Get production secret key
+4. Update `CHAPA_SECRET_KEY` in production environment
+5. Configure webhook URL: `https://yourdomain.com/api/v1/payments/webhook`
+6. Test with small amounts before going live
+
+#### Subscription Expiry Management
+
+**Automated Expiry Check:**
+
+Set up a cron job to check and expire subscriptions:
+
+```bash
+# Cron job (daily at 2 AM)
+0 2 * * * curl -X POST https://yourdomain.com/api/v1/subscriptions/check-expired \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+**Or use Node.js cron:**
+
+```typescript
+import cron from 'node-cron';
+import axios from 'axios';
+
+// Run daily at 2 AM
+cron.schedule('0 2 * * *', async () => {
+  try {
+    await axios.post(
+      'http://localhost:5000/api/v1/subscriptions/check-expired',
+      {},
+      { headers: { Authorization: `Bearer ${adminToken}` } }
+    );
+    console.log('✅ Subscription expiry check completed');
+  } catch (error) {
+    console.error('❌ Subscription expiry check failed:', error);
+  }
+});
+```
+
+**What happens on expiry:**
+1. Subscription status changed to `EXPIRED`
+2. User quota reverted to Free plan (5 GB)
+3. User can still access files within new quota
+4. Upload blocked if over new quota limit
+
+#### Use Cases
+
+**1. New User Signs Up:**
+- Default: Free plan (5 GB)
+- Can browse plans and upgrade anytime
+
+**2. User Upgrades to Premium:**
+- Selects Premium plan → Pays 199 ETB
+- Quota increased to 100 GB
+- Subscription active for 1 month
+
+**3. User Upgrades Again (Premium → Business):**
+- Current Premium subscription canceled
+- New Business subscription created
+- Remaining time from Premium added to Business
+- Quota increased to 1 TB
+
+**4. Subscription Expires:**
+- Cron job detects expired subscription
+- Status changed to EXPIRED
+- Quota reverted to Free plan (5 GB)
+- User notified via notification system
+
+**5. User Cancels Subscription:**
+- Subscription status changed to CANCELED
+- Quota immediately reverted to Free plan
+- Can re-subscribe anytime
+
+#### Security & Best Practices
+
+**Payment Security:**
+- ✅ All payment processing done via Chapa (PCI compliant)
+- ✅ No card details stored in database
+- ✅ Webhook signature validation (implement if needed)
+- ✅ HTTPS required for production
+- ✅ Transaction references uniquely generated
+
+**Subscription Management:**
+- ✅ Prevent duplicate active subscriptions
+- ✅ Validate plan exists before payment
+- ✅ Atomically update quota on subscription change
+- ✅ Real-time quota updates via Socket.IO
+- ✅ Grace period before deleting over-quota files (optional)
+
+**Admin Controls:**
+- ✅ Only admins can create/modify plans
+- ✅ Cannot delete plans with active subscriptions
+- ✅ Cannot delete default plan
+- ✅ Comprehensive payment and subscription statistics
+
+---
+
 ## Architecture
 
 ```
@@ -3782,6 +4477,6 @@ Response
 | 15 | Activity Logs + Notifications | ✅ Done |
 | 16 | Admin System | ✅ Done |
 | 17 | Real-Time Socket.IO | ✅ Done |
-| 18 | Payments + Storage Upgrades | ⏳ Next |
-| 19 | Security + Testing | ⏳ Planned |
+| 18 | Payments + Storage Upgrades | ✅ Done |
+| 19 | Security + Testing | ⏳ Next |
 | 20 | Production Deployment | ⏳ Planned |
