@@ -110,15 +110,6 @@ const swaggerOptions: swaggerJsdoc.Options = {
         description: "Payment processing via Chapa and Telebirr",
       },
       {
-        name: "Activities",
-        description: "User activity logs and audit trail",
-      },
-      {
-        name: "Notifications",
-        description:
-          "User notifications for shares, downloads, quota alerts, and invitations",
-      },
-      {
         name: "Admin",
         description:
           "Administrator-only endpoints for user management, system monitoring, and platform administration",

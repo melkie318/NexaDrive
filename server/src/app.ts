@@ -22,6 +22,9 @@ import searchRoutes from "./routes/search.routes";
 import activityRoutes from "./routes/activity.routes";
 import notificationRoutes from "./routes/notification.routes";
 import adminRoutes from "./routes/admin.routes";
+import planRoutes from "./routes/plan.routes";
+import paymentRoutes from "./routes/payment.routes";
+import subscriptionRoutes from "./routes/subscription.routes";
 import { errorHandler } from "./middlewares/errorHandler";
 import { notFound } from "./middlewares/notFound";
 
@@ -59,6 +62,9 @@ app.use("/api/v1/search", searchRoutes);
 app.use("/api/v1/activities", activityRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
 app.use("/api/v1/admin", adminRoutes);
+app.use("/api/v1/plans", planRoutes);
+app.use("/api/v1/payments", paymentRoutes);
+app.use("/api/v1/subscriptions", subscriptionRoutes);
 
 // 404 & Global Error Handling
 app.use(notFound);

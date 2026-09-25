@@ -1,5 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { Prisma } from '@prisma/client';
+import { SocketService } from './socket.service';
+import { NewNotificationPayload } from '../types/socket.types';
 
 export enum NotificationType {
   SHARE = 'SHARE',
@@ -32,6 +34,16 @@ export class NotificationService {
           type: data.type,
         },
       });
+
+      // Emit real-time notification via Socket.IO
+      const payload: NewNotificationPayload = {
+        notificationId: notification.id,
+        title: notification.title,
+        message: notification.message,
+        type: notification.type,
+        timestamp: notification.createdAt,
+      };
+      SocketService.emitNewNotification(data.userId, payload);
 
       return notification;
     } catch (error) {
@@ -103,6 +115,9 @@ export class NotificationService {
       data: { isRead: true },
     });
 
+    // Emit real-time notification read event
+    SocketService.emitNotificationRead(userId, notificationId);
+
     return updated;
   }
 
@@ -119,6 +134,9 @@ export class NotificationService {
         isRead: true,
       },
     });
+
+    // Emit notifications cleared event
+    SocketService.emitNotificationsCleared(userId, result.count);
 
     return result.count;
   }

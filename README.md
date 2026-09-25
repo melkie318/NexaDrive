@@ -3178,6 +3178,1252 @@ GET /api/v1/admin/activities?limit=100
 
 ---
 
+### Phase 17 — Real-Time Socket.IO
+
+WebSocket-based real-time communication for live notifications, file updates, and collaboration features.
+
+**WebSocket Connection:**
+```
+ws://localhost:5000
+```
+
+**Authentication:**
+Socket.IO connections require JWT authentication via:
+- `auth.token` in handshake
+- `Authorization` header with `Bearer <token>`
+- `token` query parameter
+
+**Connection Example (JavaScript Client):**
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('http://localhost:5000', {
+  auth: {
+    token: 'your_jwt_access_token'
+  },
+  transports: ['websocket', 'polling']
+});
+
+socket.on('connect', () => {
+  console.log('✅ Connected:', socket.id);
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('❌ Disconnected:', reason);
+});
+```
+
+#### Real-Time Events
+
+**Server-to-Client Events (Receive):**
+
+**File Events:**
+```javascript
+// File uploaded
+socket.on('file:uploaded', (data) => {
+  console.log('New file:', data.fileName);
+  // data: { fileId, fileName, size, mimeType, folderId, uploadedBy, timestamp }
+});
+
+// File updated
+socket.on('file:updated', (data) => {
+  console.log('File updated:', data.fileName);
+  // data: { fileId, fileName, changes, updatedBy, timestamp }
+});
+
+// File deleted
+socket.on('file:deleted', (data) => {
+  console.log('File deleted:', data.fileName);
+  // data: { fileId, fileName, deletedBy, timestamp }
+});
+
+// File restored from trash
+socket.on('file:restored', (data) => {
+  console.log('File restored:', data.fileName);
+});
+
+// File moved
+socket.on('file:moved', (data) => {
+  console.log('File moved:', data.fileName);
+  // data: { fileId, fileName, fromFolderId, toFolderId, movedBy, timestamp }
+});
+
+// File renamed
+socket.on('file:renamed', (data) => {
+  console.log(`File renamed: ${data.oldName} → ${data.newName}`);
+});
+```
+
+**Folder Events:**
+```javascript
+// Folder created
+socket.on('folder:created', (data) => {
+  console.log('New folder:', data.folderName);
+  // data: { folderId, folderName, parentId, createdBy, timestamp }
+});
+
+// Folder updated
+socket.on('folder:updated', (data) => {
+  console.log('Folder updated:', data.folderName);
+});
+
+// Folder deleted
+socket.on('folder:deleted', (data) => {
+  console.log('Folder deleted:', data.folderName);
+});
+
+// Folder restored
+socket.on('folder:restored', (data) => {
+  console.log('Folder restored:', data.folderName);
+});
+```
+
+**Share & Permission Events:**
+```javascript
+// Resource shared with you
+socket.on('share:created', (data) => {
+  console.log(`${data.sharedBy.username} shared ${data.resourceName} with you`);
+  // data: { shareId, resourceType, resourceId, resourceName, sharedWith, permission, sharedBy, timestamp }
+});
+
+// Share revoked
+socket.on('share:revoked', (data) => {
+  console.log(`Access revoked: ${data.resourceName}`);
+});
+
+// Permission changed
+socket.on('permission:changed', (data) => {
+  console.log(`Permission changed: ${data.oldPermission} → ${data.newPermission}`);
+});
+```
+
+**Notification Events:**
+```javascript
+// New notification
+socket.on('notification:new', (data) => {
+  console.log('New notification:', data.title);
+  // data: { notificationId, title, message, type, timestamp }
+  
+  // Show toast/alert to user
+  showNotification(data.title, data.message);
+});
+
+// Notification marked as read
+socket.on('notification:read', (data) => {
+  console.log('Notification read:', data.notificationId);
+});
+
+// Notifications cleared
+socket.on('notifications:cleared', (data) => {
+  console.log(`${data.count} notifications cleared`);
+});
+```
+
+**Storage Quota Events:**
+```javascript
+// Quota updated
+socket.on('quota:updated', (data) => {
+  console.log('Quota updated:', data.newQuota);
+  // data: { userId, oldQuota, newQuota, usedStorage, timestamp }
+});
+
+// Quota warning (80-95%)
+socket.on('quota:warning', (data) => {
+  console.log(`⚠️ Storage ${data.usagePercentage}% full`);
+  showWarning(`Your storage is ${data.usagePercentage}% full`);
+});
+
+// Quota exceeded (>95%)
+socket.on('quota:exceeded', (data) => {
+  console.log(`🚨 Storage ${data.usagePercentage}% full`);
+  showAlert(`Storage critical: ${data.usagePercentage}% full!`);
+});
+```
+
+**User Presence Events:**
+```javascript
+// User came online
+socket.on('user:online', (data) => {
+  console.log(`${data.username} is online`);
+});
+
+// User went offline
+socket.on('user:offline', (data) => {
+  console.log(`${data.username} is offline`);
+});
+
+// User typing indicator
+socket.on('user:typing', (data) => {
+  console.log(`${data.username} is typing...`);
+  // data: { userId, username, resourceId, resourceType }
+});
+```
+
+**Client-to-Server Events (Send):**
+
+```javascript
+// Join a room (folder/file for collaboration)
+socket.emit('join_room', { room: 'folder:abc123' }, (success) => {
+  console.log('Joined room:', success);
+});
+
+// Leave a room
+socket.emit('leave_room', { room: 'folder:abc123' }, (success) => {
+  console.log('Left room:', success);
+});
+
+// Broadcast typing indicator
+socket.emit('user:typing', {
+  userId: 'your-user-id',
+  username: 'yourname',
+  resourceId: 'file-or-folder-id',
+  resourceType: 'file' // or 'folder'
+});
+```
+
+#### Room System
+
+Users are automatically joined to rooms for targeted real-time updates:
+
+**Room Naming Convention:**
+
+| Room Pattern | Purpose | Example |
+|--------------|---------|---------|
+| `user:<userId>` | Personal notifications | `user:550e8400-...` |
+| `file:<fileId>` | File collaboration | `file:7e8f9a0b-...` |
+| `folder:<folderId>` | Folder collaboration | `folder:3fa85f64-...` |
+| `group:<groupId>` | Group notifications | `group:9kg20k20-...` |
+
+**Auto-Join:**
+- Users automatically join their personal room (`user:<userId>`) on connection
+- File/folder rooms can be joined manually for real-time collaboration
+
+**Example: Join folder room for live updates:**
+```javascript
+socket.emit('join_room', { room: 'folder:abc123' });
+
+// Now you'll receive real-time updates when:
+// - Files are uploaded to this folder
+// - Folder is renamed/moved/deleted
+// - Other users are typing/editing
+```
+
+#### Integration Examples
+
+**React Hook:**
+
+```typescript
+import { useEffect, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
+
+export const useSocket = (token: string) => {
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    const socketInstance = io('http://localhost:5000', {
+      auth: { token },
+      transports: ['websocket', 'polling']
+    });
+
+    socketInstance.on('connect', () => {
+      console.log('✅ Socket connected');
+      setConnected(true);
+    });
+
+    socketInstance.on('disconnect', () => {
+      console.log('❌ Socket disconnected');
+      setConnected(false);
+    });
+
+    // Listen for notifications
+    socketInstance.on('notification:new', (data) => {
+      // Show toast notification
+      toast.info(data.title, { description: data.message });
+    });
+
+    // Listen for file uploads
+    socketInstance.on('file:uploaded', (data) => {
+      // Refresh file list or add file to UI
+      console.log('New file:', data.fileName);
+    });
+
+    setSocket(socketInstance);
+
+    return () => {
+      socketInstance.disconnect();
+    };
+  }, [token]);
+
+  return { socket, connected };
+};
+```
+
+**Usage in Component:**
+
+```typescript
+const MyComponent = () => {
+  const { socket, connected } = useSocket(authToken);
+
+  const handleJoinFolder = (folderId: string) => {
+    socket?.emit('join_room', { room: `folder:${folderId}` });
+  };
+
+  const handleTyping = (fileId: string) => {
+    socket?.emit('user:typing', {
+      userId: currentUser.id,
+      username: currentUser.username,
+      resourceId: fileId,
+      resourceType: 'file'
+    });
+  };
+
+  return (
+    <div>
+      <div>Status: {connected ? '🟢 Connected' : '🔴 Disconnected'}</div>
+      {/* Your UI */}
+    </div>
+  );
+};
+```
+
+**Vue.js Integration:**
+
+```javascript
+// composables/useSocket.js
+import { ref, onMounted, onUnmounted } from 'vue';
+import { io } from 'socket.io-client';
+
+export function useSocket(token) {
+  const socket = ref(null);
+  const connected = ref(false);
+
+  onMounted(() => {
+    socket.value = io('http://localhost:5000', {
+      auth: { token }
+    });
+
+    socket.value.on('connect', () => {
+      connected.value = true;
+    });
+
+    socket.value.on('disconnect', () => {
+      connected.value = false;
+    });
+
+    socket.value.on('notification:new', (data) => {
+      // Show notification
+      console.log('New notification:', data);
+    });
+  });
+
+  onUnmounted(() => {
+    socket.value?.disconnect();
+  });
+
+  return { socket, connected };
+}
+```
+
+#### Event Payload Examples
+
+**File Uploaded:**
+```json
+{
+  "fileId": "7e8f9a0b-5c6d-4e3f-a2b1-c9d8e7f6a5b4",
+  "fileName": "report.pdf",
+  "size": 2048576,
+  "mimeType": "application/pdf",
+  "folderId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "uploadedBy": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "johndoe",
+    "email": "john@example.com"
+  },
+  "timestamp": "2026-09-21T14:30:00Z"
+}
+```
+
+**Resource Shared:**
+```json
+{
+  "shareId": "9kg20k20-...",
+  "resourceType": "file",
+  "resourceId": "7e8f9a0b-...",
+  "resourceName": "Q3 Report.pdf",
+  "sharedWith": {
+    "id": "user-id",
+    "email": "jane@example.com",
+    "username": "janedoe"
+  },
+  "permission": "EDIT",
+  "sharedBy": {
+    "id": "owner-id",
+    "username": "johndoe"
+  },
+  "timestamp": "2026-09-21T14:35:00Z"
+}
+```
+
+**New Notification:**
+```json
+{
+  "notificationId": "abc123-...",
+  "title": "New Share",
+  "message": "John Doe shared a file \"Report.pdf\" with you",
+  "type": "SHARE",
+  "timestamp": "2026-09-21T14:35:00Z"
+}
+```
+
+#### Use Cases
+
+**1. Real-Time Notifications:**
+```javascript
+// User receives instant notification when:
+// - Someone shares a file with them
+// - Someone downloads their file
+// - Storage quota reaches threshold
+// - Invitation received
+
+socket.on('notification:new', (data) => {
+  showToast(data.title, data.message, data.type);
+});
+```
+
+**2. Collaborative File Management:**
+```javascript
+// Join folder room
+socket.emit('join_room', { room: 'folder:abc123' });
+
+// Listen for changes
+socket.on('file:uploaded', (data) => {
+  // Add new file to UI without refresh
+  addFileToList(data);
+});
+
+socket.on('file:deleted', (data) => {
+  // Remove file from UI
+  removeFileFromList(data.fileId);
+});
+```
+
+**3. Live Typing Indicators:**
+```javascript
+// Send typing event (debounced)
+const handleTyping = debounce(() => {
+  socket.emit('user:typing', {
+    userId: currentUser.id,
+    username: currentUser.username,
+    resourceId: currentFileId,
+    resourceType: 'file'
+  });
+}, 500);
+
+// Show typing indicator
+socket.on('user:typing', (data) => {
+  showTypingIndicator(`${data.username} is typing...`);
+});
+```
+
+**4. Storage Monitoring:**
+```javascript
+socket.on('quota:warning', (data) => {
+  if (data.usagePercentage >= 90) {
+    showBanner(`⚠️ Storage ${data.usagePercentage}% full. Clean up files or upgrade.`);
+  }
+});
+
+socket.on('quota:exceeded', (data) => {
+  showModal('Storage Full', 'Cannot upload more files. Please upgrade or delete files.');
+});
+```
+
+**5. User Presence:**
+```javascript
+// Track online users in a shared folder
+const onlineUsers = new Set();
+
+socket.on('user:online', (data) => {
+  onlineUsers.add(data.userId);
+  updatePresenceIndicator(data.userId, 'online');
+});
+
+socket.on('user:offline', (data) => {
+  onlineUsers.delete(data.userId);
+  updatePresenceIndicator(data.userId, 'offline');
+});
+```
+
+#### Security & Performance
+
+**Authentication:**
+- ✅ JWT token verification on connection
+- ✅ Token validated against database
+- ✅ Suspended users blocked
+- ✅ User info attached to socket instance
+
+**Authorization:**
+- ✅ Users only receive events they're authorized to see
+- ✅ Personal room (`user:<userId>`) for private events
+- ✅ Resource rooms require proper access permissions
+
+**Performance:**
+- ✅ Automatic reconnection on connection loss
+- ✅ Configurable ping/pong timeouts (60s timeout, 25s interval)
+- ✅ Support for WebSocket and polling transports
+- ✅ Room-based event targeting (not broadcast to all)
+
+**Scalability Notes:**
+- Current setup: Single server instance
+- For production scaling: Use Redis adapter for multi-server Socket.IO
+- Horizontal scaling requires sticky sessions or Redis pub/sub
+
+#### Error Handling
+
+**Connection Errors:**
+```javascript
+socket.on('connect_error', (error) => {
+  console.error('Connection error:', error.message);
+  
+  if (error.message === 'Authentication token required') {
+    // Redirect to login
+    redirectToLogin();
+  }
+  
+  if (error.message === 'Invalid or expired token') {
+    // Refresh token and reconnect
+    refreshTokenAndReconnect();
+  }
+});
+```
+
+**Socket Errors:**
+```javascript
+socket.on('error', (error) => {
+  console.error('Socket error:', error.message);
+  showErrorToast(error.message);
+});
+```
+
+#### Testing Socket.IO
+
+**Using Socket.IO Client CLI:**
+
+```bash
+npm install -g socket.io-client-cli
+
+# Connect with token
+socket-io-client http://localhost:5000 \
+  --auth '{"token":"your_jwt_token"}' \
+  --listen 'notification:new' \
+  --listen 'file:uploaded'
+```
+
+**Using Postman:**
+1. Create new WebSocket request
+2. Connect to `ws://localhost:5000`
+3. Add authentication in connection settings
+4. Listen for events and emit test events
+
+---
+
+### Phase 18 — Payments + Storage Upgrades
+
+Complete payment processing system with Chapa integration, storage plan management, and subscription lifecycle.
+
+**Payment Flow:**
+```
+User selects plan → Initialize payment → Redirect to Chapa → User pays → 
+Webhook callback → Verify payment → Create subscription → Update quota
+```
+
+#### Storage Plans
+
+**Available Plans (Default Seed):**
+
+| Plan | Price (ETB) | Storage | Features |
+|------|-------------|---------|----------|
+| Free | 0 | 5 GB | Basic storage, file sharing |
+| Premium | 199/month | 100 GB | Priority support, version history |
+| Business | 499/month | 1 TB | Team collaboration, admin panel |
+
+**Endpoints:**
+
+```bash
+# Get all plans
+GET /api/v1/plans
+
+# Get plan by ID
+GET /api/v1/plans/:planId
+
+# Get default plan
+GET /api/v1/plans/default
+
+# Create plan (Admin)
+POST /api/v1/plans
+
+# Update plan (Admin)
+PUT /api/v1/plans/:planId
+
+# Delete plan (Admin)
+DELETE /api/v1/plans/:planId
+
+# Seed default plans (Admin)
+POST /api/v1/plans/seed/defaults
+```
+
+**Get all plans:**
+
+```bash
+GET /api/v1/plans
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Storage plans retrieved successfully",
+  "data": [
+    {
+      "id": "550e8400-...",
+      "name": "Free",
+      "priceETB": 0,
+      "quotaGB": 5,
+      "isDefault": true,
+      "subscriberCount": 1247
+    },
+    {
+      "id": "660f9511-...",
+      "name": "Premium",
+      "priceETB": 199,
+      "quotaGB": 100,
+      "isDefault": false,
+      "subscriberCount": 89
+    },
+    {
+      "id": "770ga622-...",
+      "name": "Business",
+      "priceETB": 499,
+      "quotaGB": 1024,
+      "isDefault": false,
+      "subscriberCount": 15
+    }
+  ]
+}
+```
+
+**Create plan (Admin only):**
+
+```bash
+POST /api/v1/plans
+Authorization: Bearer <admin_token>
+Content-Type: application/json
+
+{
+  "name": "Enterprise",
+  "priceETB": 999,
+  "quotaGB": 5120,
+  "isDefault": false
+}
+```
+
+#### Payments
+
+**Payment Process:**
+
+**1. Initialize Payment:**
+
+```bash
+POST /api/v1/payments/initialize
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "planId": "660f9511-...",
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "john@example.com",
+  "durationMonths": 1,
+  "returnUrl": "https://myapp.com/payment/success"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Payment initialized successfully",
+  "data": {
+    "paymentId": "abc123-...",
+    "txRef": "NEX-1695123456789-550e8400",
+    "checkoutUrl": "https://checkout.chapa.co/checkout/web/payment/NEX-...",
+    "amount": 199,
+    "currency": "ETB",
+    "plan": {
+      "id": "660f9511-...",
+      "name": "Premium",
+      "priceETB": 199
+    }
+  }
+}
+```
+
+**Usage:**
+```javascript
+// Redirect user to checkout URL
+window.location.href = data.checkoutUrl;
+
+// Or open in popup/iframe
+window.open(data.checkoutUrl, 'Chapa Payment', 'width=800,height=600');
+```
+
+**2. Verify Payment:**
+
+After payment, Chapa redirects to `returnUrl` with `tx_ref` query parameter.
+
+```bash
+GET /api/v1/payments/verify?txRef=NEX-1695123456789-550e8400
+Authorization: Bearer <token>
+```
+
+**Response (Success):**
+
+```json
+{
+  "success": true,
+  "message": "Payment verified and subscription activated",
+  "data": {
+    "status": "SUCCESS",
+    "payment": {
+      "id": "abc123-...",
+      "txRef": "NEX-1695123456789-550e8400",
+      "amount": 199,
+      "status": "SUCCESS"
+    },
+    "subscription": {
+      "id": "def456-...",
+      "planName": "Premium",
+      "startDate": "2026-09-21T10:00:00Z",
+      "endDate": "2026-10-21T10:00:00Z"
+    }
+  }
+}
+```
+
+**3. Webhook Handler:**
+
+Chapa automatically sends webhook to `/api/v1/payments/webhook` for payment status updates.
+
+```bash
+POST /api/v1/payments/webhook
+# No auth required (validates from Chapa)
+Content-Type: application/json
+
+{
+  "tx_ref": "NEX-1695123456789-550e8400",
+  "status": "success",
+  "amount": "199",
+  "currency": "ETB",
+  "meta": {
+    "userId": "550e8400-...",
+    "planId": "660f9511-...",
+    "durationMonths": 1
+  }
+}
+```
+
+**Get payment history:**
+
+```bash
+GET /api/v1/payments?page=1&limit=20
+Authorization: Bearer <token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Payment history retrieved successfully",
+  "data": [
+    {
+      "id": "abc123-...",
+      "txRef": "NEX-1695123456789-550e8400",
+      "amount": 199,
+      "currency": "ETB",
+      "status": "SUCCESS",
+      "provider": "CHAPA",
+      "createdAt": "2026-09-21T10:00:00Z",
+      "subscription": {
+        "id": "def456-...",
+        "planName": "Premium",
+        "startDate": "2026-09-21T10:00:00Z",
+        "endDate": "2026-10-21T10:00:00Z"
+      }
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "limit": 20,
+    "total": 3,
+    "totalPages": 1
+  }
+}
+```
+
+**Get payment stats (Admin):**
+
+```bash
+GET /api/v1/payments/stats
+Authorization: Bearer <admin_token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Payment statistics retrieved successfully",
+  "data": {
+    "total": 342,
+    "successful": 315,
+    "failed": 19,
+    "pending": 8,
+    "revenue": {
+      "total": 62685,
+      "byProvider": [
+        {
+          "provider": "CHAPA",
+          "amount": 62685,
+          "count": 315
+        }
+      ]
+    }
+  }
+}
+```
+
+#### Subscriptions
+
+**Subscription States:**
+- `ACTIVE` - Subscription is active and valid
+- `CANCELED` - User canceled subscription
+- `EXPIRED` - Subscription period ended
+- `PAST_DUE` - Payment failed (future)
+
+**Endpoints:**
+
+```bash
+# Create subscription (after payment)
+POST /api/v1/subscriptions
+
+# Get current subscription
+GET /api/v1/subscriptions/current
+
+# Get subscription history
+GET /api/v1/subscriptions/history
+
+# Cancel subscription
+POST /api/v1/subscriptions/:subscriptionId/cancel
+
+# Upgrade subscription
+POST /api/v1/subscriptions/upgrade
+
+# Renew subscription
+POST /api/v1/subscriptions/:subscriptionId/renew
+
+# Get stats (Admin)
+GET /api/v1/subscriptions/stats
+
+# Check expired (Admin/Cron)
+POST /api/v1/subscriptions/check-expired
+```
+
+**Get current subscription:**
+
+```bash
+GET /api/v1/subscriptions/current
+Authorization: Bearer <token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Current subscription retrieved successfully",
+  "data": {
+    "id": "def456-...",
+    "userId": "550e8400-...",
+    "planId": "660f9511-...",
+    "status": "ACTIVE",
+    "startDate": "2026-09-21T10:00:00Z",
+    "endDate": "2026-10-21T10:00:00Z",
+    "plan": {
+      "id": "660f9511-...",
+      "name": "Premium",
+      "priceETB": 199,
+      "quotaGB": 100
+    }
+  }
+}
+```
+
+**Cancel subscription:**
+
+```bash
+POST /api/v1/subscriptions/def456-.../cancel
+Authorization: Bearer <token>
+```
+
+User is reverted to Free plan quota after cancellation.
+
+**Upgrade subscription:**
+
+```bash
+POST /api/v1/subscriptions/upgrade
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "newPlanId": "770ga622-..."
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Subscription upgraded successfully",
+  "data": {
+    "id": "ghi789-...",
+    "userId": "550e8400-...",
+    "planId": "770ga622-...",
+    "status": "ACTIVE",
+    "startDate": "2026-09-21T10:30:00Z",
+    "endDate": "2026-11-21T10:30:00Z",
+    "plan": {
+      "id": "770ga622-...",
+      "name": "Business",
+      "priceETB": 499,
+      "quotaGB": 1024
+    }
+  }
+}
+```
+
+**Renew subscription:**
+
+```bash
+POST /api/v1/subscriptions/def456-.../renew
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "durationMonths": 3
+}
+```
+
+Extends subscription by 3 months from current end date.
+
+**Get subscription stats (Admin):**
+
+```bash
+GET /api/v1/subscriptions/stats
+Authorization: Bearer <admin_token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Subscription statistics retrieved successfully",
+  "data": {
+    "total": 1351,
+    "active": 1247,
+    "canceled": 89,
+    "expired": 15,
+    "byPlan": [
+      {
+        "planId": "550e8400-...",
+        "planName": "Free",
+        "count": 1143
+      },
+      {
+        "planId": "660f9511-...",
+        "planName": "Premium",
+        "count": 89
+      },
+      {
+        "planId": "770ga622-...",
+        "planName": "Business",
+        "count": 15
+      }
+    ]
+  }
+}
+```
+
+#### Integration Examples
+
+**Complete Payment Flow (React):**
+
+```typescript
+import axios from 'axios';
+
+const PlanUpgrade = () => {
+  const [plans, setPlans] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    // Fetch available plans
+    axios.get('/api/v1/plans')
+      .then(res => setPlans(res.data.data));
+  }, []);
+
+  const handlePurchase = async (planId: string) => {
+    setLoading(true);
+    
+    try {
+      // Initialize payment
+      const response = await axios.post('/api/v1/payments/initialize', {
+        planId,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        durationMonths: 1,
+        returnUrl: window.location.origin + '/payment/success'
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      // Redirect to Chapa checkout
+      window.location.href = response.data.data.checkoutUrl;
+    } catch (error) {
+      toast.error('Payment initialization failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="plans">
+      {plans.map(plan => (
+        <PlanCard 
+          key={plan.id}
+          plan={plan}
+          onPurchase={() => handlePurchase(plan.id)}
+          loading={loading}
+        />
+      ))}
+    </div>
+  );
+};
+```
+
+**Payment Success Handler:**
+
+```typescript
+const PaymentSuccess = () => {
+  const [searchParams] = useSearchParams();
+  const txRef = searchParams.get('tx_ref');
+
+  useEffect(() => {
+    const verifyPayment = async () => {
+      try {
+        const response = await axios.get(
+          `/api/v1/payments/verify?txRef=${txRef}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        if (response.data.data.status === 'SUCCESS') {
+          toast.success('Payment successful! Your subscription is now active.');
+          // Refresh user quota
+          fetchUserProfile();
+          // Redirect to dashboard
+          navigate('/dashboard');
+        } else {
+          toast.error('Payment verification failed');
+          navigate('/plans');
+        }
+      } catch (error) {
+        toast.error('Payment verification error');
+        navigate('/plans');
+      }
+    };
+
+    if (txRef) {
+      verifyPayment();
+    }
+  }, [txRef]);
+
+  return <div>Verifying payment...</div>;
+};
+```
+
+**Check Current Subscription:**
+
+```typescript
+const SubscriptionStatus = () => {
+  const [subscription, setSubscription] = useState(null);
+
+  useEffect(() => {
+    axios.get('/api/v1/subscriptions/current', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(res => setSubscription(res.data.data))
+      .catch(err => {
+        if (err.response?.status === 404) {
+          // No active subscription (Free plan)
+          setSubscription(null);
+        }
+      });
+  }, []);
+
+  if (!subscription) {
+    return <div>Free Plan - <Link to="/plans">Upgrade</Link></div>;
+  }
+
+  const daysRemaining = Math.ceil(
+    (new Date(subscription.endDate) - new Date()) / (1000 * 60 * 60 * 24)
+  );
+
+  return (
+    <div>
+      <h3>{subscription.plan.name} Plan</h3>
+      <p>Storage: {subscription.plan.quotaGB} GB</p>
+      <p>Expires in: {daysRemaining} days</p>
+      <button onClick={handleCancel}>Cancel Subscription</button>
+    </div>
+  );
+};
+```
+
+#### Chapa Configuration
+
+**Environment Variables:**
+
+```env
+# .env
+CHAPA_SECRET_KEY=your_chapa_secret_key
+CHAPA_API_URL=https://api.chapa.co/v1
+API_URL=https://yourdomain.com
+CLIENT_URL=https://yourdomain.com
+```
+
+**Test Mode:**
+
+Chapa provides test credentials for development:
+- Test Secret Key: `CHASECK_TEST-...`
+- Test Card Numbers: Available in Chapa documentation
+- Use test mode for development and staging
+
+**Production Setup:**
+
+1. Register at [chapa.co](https://chapa.co)
+2. Complete business verification
+3. Get production secret key
+4. Update `CHAPA_SECRET_KEY` in production environment
+5. Configure webhook URL: `https://yourdomain.com/api/v1/payments/webhook`
+6. Test with small amounts before going live
+
+#### Subscription Expiry Management
+
+**Automated Expiry Check:**
+
+Set up a cron job to check and expire subscriptions:
+
+```bash
+# Cron job (daily at 2 AM)
+0 2 * * * curl -X POST https://yourdomain.com/api/v1/subscriptions/check-expired \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+**Or use Node.js cron:**
+
+```typescript
+import cron from 'node-cron';
+import axios from 'axios';
+
+// Run daily at 2 AM
+cron.schedule('0 2 * * *', async () => {
+  try {
+    await axios.post(
+      'http://localhost:5000/api/v1/subscriptions/check-expired',
+      {},
+      { headers: { Authorization: `Bearer ${adminToken}` } }
+    );
+    console.log('✅ Subscription expiry check completed');
+  } catch (error) {
+    console.error('❌ Subscription expiry check failed:', error);
+  }
+});
+```
+
+**What happens on expiry:**
+1. Subscription status changed to `EXPIRED`
+2. User quota reverted to Free plan (5 GB)
+3. User can still access files within new quota
+4. Upload blocked if over new quota limit
+
+#### Use Cases
+
+**1. New User Signs Up:**
+- Default: Free plan (5 GB)
+- Can browse plans and upgrade anytime
+
+**2. User Upgrades to Premium:**
+- Selects Premium plan → Pays 199 ETB
+- Quota increased to 100 GB
+- Subscription active for 1 month
+
+**3. User Upgrades Again (Premium → Business):**
+- Current Premium subscription canceled
+- New Business subscription created
+- Remaining time from Premium added to Business
+- Quota increased to 1 TB
+
+**4. Subscription Expires:**
+- Cron job detects expired subscription
+- Status changed to EXPIRED
+- Quota reverted to Free plan (5 GB)
+- User notified via notification system
+
+**5. User Cancels Subscription:**
+- Subscription status changed to CANCELED
+- Quota immediately reverted to Free plan
+- Can re-subscribe anytime
+
+#### Security & Best Practices
+
+**Payment Security:**
+- ✅ All payment processing done via Chapa (PCI compliant)
+- ✅ No card details stored in database
+- ✅ Webhook signature validation (implement if needed)
+- ✅ HTTPS required for production
+- ✅ Transaction references uniquely generated
+
+**Subscription Management:**
+- ✅ Prevent duplicate active subscriptions
+- ✅ Validate plan exists before payment
+- ✅ Atomically update quota on subscription change
+- ✅ Real-time quota updates via Socket.IO
+- ✅ Grace period before deleting over-quota files (optional)
+
+**Admin Controls:**
+- ✅ Only admins can create/modify plans
+- ✅ Cannot delete plans with active subscriptions
+- ✅ Cannot delete default plan
+- ✅ Comprehensive payment and subscription statistics
+
+---
+
 ## Architecture
 
 ```
@@ -3230,7 +4476,7 @@ Response
 | 14 | CLI / Command Interface | ✅ Done |
 | 15 | Activity Logs + Notifications | ✅ Done |
 | 16 | Admin System | ✅ Done |
-| 17 | Real-Time Socket.IO | ⏳ Next |
-| 18 | Payments + Storage Upgrades | ⏳ Planned |
-| 19 | Security + Testing | ⏳ Planned |
+| 17 | Real-Time Socket.IO | ✅ Done |
+| 18 | Payments + Storage Upgrades | ✅ Done |
+| 19 | Security + Testing | ⏳ Next |
 | 20 | Production Deployment | ⏳ Planned |
