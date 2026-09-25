@@ -5,6 +5,8 @@ import {
   CreateGroupShareInput,
 } from '../validations/share.validation';
 import { PermissionService } from './permission.service';
+import { SocketService } from './socket.service';
+import { ResourceSharedPayload } from '../types/socket.types';
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -199,6 +201,28 @@ export class ShareService {
         }),
       },
     });
+
+    // Emit real-time Socket event to recipient
+    if (share.sharedWith) {
+      const socketPayload: ResourceSharedPayload = {
+        shareId: share.id,
+        resourceType: fileId ? 'file' : 'folder',
+        resourceId: (fileId || folderId) as string,
+        resourceName: share.file?.name || share.folder?.name || 'Unknown',
+        sharedWith: {
+          id: share.sharedWith.id,
+          email: share.sharedWith.email,
+          username: share.sharedWith.username,
+        },
+        permission: role,
+        sharedBy: {
+          id: share.createdBy.id,
+          username: share.createdBy.username,
+        },
+        timestamp: share.createdAt,
+      };
+      SocketService.emitResourceShared(targetUserId, socketPayload);
+    }
 
     return formatShare(share);
   }

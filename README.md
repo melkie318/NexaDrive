@@ -3178,6 +3178,557 @@ GET /api/v1/admin/activities?limit=100
 
 ---
 
+### Phase 17 — Real-Time Socket.IO
+
+WebSocket-based real-time communication for live notifications, file updates, and collaboration features.
+
+**WebSocket Connection:**
+```
+ws://localhost:5000
+```
+
+**Authentication:**
+Socket.IO connections require JWT authentication via:
+- `auth.token` in handshake
+- `Authorization` header with `Bearer <token>`
+- `token` query parameter
+
+**Connection Example (JavaScript Client):**
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('http://localhost:5000', {
+  auth: {
+    token: 'your_jwt_access_token'
+  },
+  transports: ['websocket', 'polling']
+});
+
+socket.on('connect', () => {
+  console.log('✅ Connected:', socket.id);
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('❌ Disconnected:', reason);
+});
+```
+
+#### Real-Time Events
+
+**Server-to-Client Events (Receive):**
+
+**File Events:**
+```javascript
+// File uploaded
+socket.on('file:uploaded', (data) => {
+  console.log('New file:', data.fileName);
+  // data: { fileId, fileName, size, mimeType, folderId, uploadedBy, timestamp }
+});
+
+// File updated
+socket.on('file:updated', (data) => {
+  console.log('File updated:', data.fileName);
+  // data: { fileId, fileName, changes, updatedBy, timestamp }
+});
+
+// File deleted
+socket.on('file:deleted', (data) => {
+  console.log('File deleted:', data.fileName);
+  // data: { fileId, fileName, deletedBy, timestamp }
+});
+
+// File restored from trash
+socket.on('file:restored', (data) => {
+  console.log('File restored:', data.fileName);
+});
+
+// File moved
+socket.on('file:moved', (data) => {
+  console.log('File moved:', data.fileName);
+  // data: { fileId, fileName, fromFolderId, toFolderId, movedBy, timestamp }
+});
+
+// File renamed
+socket.on('file:renamed', (data) => {
+  console.log(`File renamed: ${data.oldName} → ${data.newName}`);
+});
+```
+
+**Folder Events:**
+```javascript
+// Folder created
+socket.on('folder:created', (data) => {
+  console.log('New folder:', data.folderName);
+  // data: { folderId, folderName, parentId, createdBy, timestamp }
+});
+
+// Folder updated
+socket.on('folder:updated', (data) => {
+  console.log('Folder updated:', data.folderName);
+});
+
+// Folder deleted
+socket.on('folder:deleted', (data) => {
+  console.log('Folder deleted:', data.folderName);
+});
+
+// Folder restored
+socket.on('folder:restored', (data) => {
+  console.log('Folder restored:', data.folderName);
+});
+```
+
+**Share & Permission Events:**
+```javascript
+// Resource shared with you
+socket.on('share:created', (data) => {
+  console.log(`${data.sharedBy.username} shared ${data.resourceName} with you`);
+  // data: { shareId, resourceType, resourceId, resourceName, sharedWith, permission, sharedBy, timestamp }
+});
+
+// Share revoked
+socket.on('share:revoked', (data) => {
+  console.log(`Access revoked: ${data.resourceName}`);
+});
+
+// Permission changed
+socket.on('permission:changed', (data) => {
+  console.log(`Permission changed: ${data.oldPermission} → ${data.newPermission}`);
+});
+```
+
+**Notification Events:**
+```javascript
+// New notification
+socket.on('notification:new', (data) => {
+  console.log('New notification:', data.title);
+  // data: { notificationId, title, message, type, timestamp }
+  
+  // Show toast/alert to user
+  showNotification(data.title, data.message);
+});
+
+// Notification marked as read
+socket.on('notification:read', (data) => {
+  console.log('Notification read:', data.notificationId);
+});
+
+// Notifications cleared
+socket.on('notifications:cleared', (data) => {
+  console.log(`${data.count} notifications cleared`);
+});
+```
+
+**Storage Quota Events:**
+```javascript
+// Quota updated
+socket.on('quota:updated', (data) => {
+  console.log('Quota updated:', data.newQuota);
+  // data: { userId, oldQuota, newQuota, usedStorage, timestamp }
+});
+
+// Quota warning (80-95%)
+socket.on('quota:warning', (data) => {
+  console.log(`⚠️ Storage ${data.usagePercentage}% full`);
+  showWarning(`Your storage is ${data.usagePercentage}% full`);
+});
+
+// Quota exceeded (>95%)
+socket.on('quota:exceeded', (data) => {
+  console.log(`🚨 Storage ${data.usagePercentage}% full`);
+  showAlert(`Storage critical: ${data.usagePercentage}% full!`);
+});
+```
+
+**User Presence Events:**
+```javascript
+// User came online
+socket.on('user:online', (data) => {
+  console.log(`${data.username} is online`);
+});
+
+// User went offline
+socket.on('user:offline', (data) => {
+  console.log(`${data.username} is offline`);
+});
+
+// User typing indicator
+socket.on('user:typing', (data) => {
+  console.log(`${data.username} is typing...`);
+  // data: { userId, username, resourceId, resourceType }
+});
+```
+
+**Client-to-Server Events (Send):**
+
+```javascript
+// Join a room (folder/file for collaboration)
+socket.emit('join_room', { room: 'folder:abc123' }, (success) => {
+  console.log('Joined room:', success);
+});
+
+// Leave a room
+socket.emit('leave_room', { room: 'folder:abc123' }, (success) => {
+  console.log('Left room:', success);
+});
+
+// Broadcast typing indicator
+socket.emit('user:typing', {
+  userId: 'your-user-id',
+  username: 'yourname',
+  resourceId: 'file-or-folder-id',
+  resourceType: 'file' // or 'folder'
+});
+```
+
+#### Room System
+
+Users are automatically joined to rooms for targeted real-time updates:
+
+**Room Naming Convention:**
+
+| Room Pattern | Purpose | Example |
+|--------------|---------|---------|
+| `user:<userId>` | Personal notifications | `user:550e8400-...` |
+| `file:<fileId>` | File collaboration | `file:7e8f9a0b-...` |
+| `folder:<folderId>` | Folder collaboration | `folder:3fa85f64-...` |
+| `group:<groupId>` | Group notifications | `group:9kg20k20-...` |
+
+**Auto-Join:**
+- Users automatically join their personal room (`user:<userId>`) on connection
+- File/folder rooms can be joined manually for real-time collaboration
+
+**Example: Join folder room for live updates:**
+```javascript
+socket.emit('join_room', { room: 'folder:abc123' });
+
+// Now you'll receive real-time updates when:
+// - Files are uploaded to this folder
+// - Folder is renamed/moved/deleted
+// - Other users are typing/editing
+```
+
+#### Integration Examples
+
+**React Hook:**
+
+```typescript
+import { useEffect, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
+
+export const useSocket = (token: string) => {
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    const socketInstance = io('http://localhost:5000', {
+      auth: { token },
+      transports: ['websocket', 'polling']
+    });
+
+    socketInstance.on('connect', () => {
+      console.log('✅ Socket connected');
+      setConnected(true);
+    });
+
+    socketInstance.on('disconnect', () => {
+      console.log('❌ Socket disconnected');
+      setConnected(false);
+    });
+
+    // Listen for notifications
+    socketInstance.on('notification:new', (data) => {
+      // Show toast notification
+      toast.info(data.title, { description: data.message });
+    });
+
+    // Listen for file uploads
+    socketInstance.on('file:uploaded', (data) => {
+      // Refresh file list or add file to UI
+      console.log('New file:', data.fileName);
+    });
+
+    setSocket(socketInstance);
+
+    return () => {
+      socketInstance.disconnect();
+    };
+  }, [token]);
+
+  return { socket, connected };
+};
+```
+
+**Usage in Component:**
+
+```typescript
+const MyComponent = () => {
+  const { socket, connected } = useSocket(authToken);
+
+  const handleJoinFolder = (folderId: string) => {
+    socket?.emit('join_room', { room: `folder:${folderId}` });
+  };
+
+  const handleTyping = (fileId: string) => {
+    socket?.emit('user:typing', {
+      userId: currentUser.id,
+      username: currentUser.username,
+      resourceId: fileId,
+      resourceType: 'file'
+    });
+  };
+
+  return (
+    <div>
+      <div>Status: {connected ? '🟢 Connected' : '🔴 Disconnected'}</div>
+      {/* Your UI */}
+    </div>
+  );
+};
+```
+
+**Vue.js Integration:**
+
+```javascript
+// composables/useSocket.js
+import { ref, onMounted, onUnmounted } from 'vue';
+import { io } from 'socket.io-client';
+
+export function useSocket(token) {
+  const socket = ref(null);
+  const connected = ref(false);
+
+  onMounted(() => {
+    socket.value = io('http://localhost:5000', {
+      auth: { token }
+    });
+
+    socket.value.on('connect', () => {
+      connected.value = true;
+    });
+
+    socket.value.on('disconnect', () => {
+      connected.value = false;
+    });
+
+    socket.value.on('notification:new', (data) => {
+      // Show notification
+      console.log('New notification:', data);
+    });
+  });
+
+  onUnmounted(() => {
+    socket.value?.disconnect();
+  });
+
+  return { socket, connected };
+}
+```
+
+#### Event Payload Examples
+
+**File Uploaded:**
+```json
+{
+  "fileId": "7e8f9a0b-5c6d-4e3f-a2b1-c9d8e7f6a5b4",
+  "fileName": "report.pdf",
+  "size": 2048576,
+  "mimeType": "application/pdf",
+  "folderId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "uploadedBy": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "johndoe",
+    "email": "john@example.com"
+  },
+  "timestamp": "2026-09-21T14:30:00Z"
+}
+```
+
+**Resource Shared:**
+```json
+{
+  "shareId": "9kg20k20-...",
+  "resourceType": "file",
+  "resourceId": "7e8f9a0b-...",
+  "resourceName": "Q3 Report.pdf",
+  "sharedWith": {
+    "id": "user-id",
+    "email": "jane@example.com",
+    "username": "janedoe"
+  },
+  "permission": "EDIT",
+  "sharedBy": {
+    "id": "owner-id",
+    "username": "johndoe"
+  },
+  "timestamp": "2026-09-21T14:35:00Z"
+}
+```
+
+**New Notification:**
+```json
+{
+  "notificationId": "abc123-...",
+  "title": "New Share",
+  "message": "John Doe shared a file \"Report.pdf\" with you",
+  "type": "SHARE",
+  "timestamp": "2026-09-21T14:35:00Z"
+}
+```
+
+#### Use Cases
+
+**1. Real-Time Notifications:**
+```javascript
+// User receives instant notification when:
+// - Someone shares a file with them
+// - Someone downloads their file
+// - Storage quota reaches threshold
+// - Invitation received
+
+socket.on('notification:new', (data) => {
+  showToast(data.title, data.message, data.type);
+});
+```
+
+**2. Collaborative File Management:**
+```javascript
+// Join folder room
+socket.emit('join_room', { room: 'folder:abc123' });
+
+// Listen for changes
+socket.on('file:uploaded', (data) => {
+  // Add new file to UI without refresh
+  addFileToList(data);
+});
+
+socket.on('file:deleted', (data) => {
+  // Remove file from UI
+  removeFileFromList(data.fileId);
+});
+```
+
+**3. Live Typing Indicators:**
+```javascript
+// Send typing event (debounced)
+const handleTyping = debounce(() => {
+  socket.emit('user:typing', {
+    userId: currentUser.id,
+    username: currentUser.username,
+    resourceId: currentFileId,
+    resourceType: 'file'
+  });
+}, 500);
+
+// Show typing indicator
+socket.on('user:typing', (data) => {
+  showTypingIndicator(`${data.username} is typing...`);
+});
+```
+
+**4. Storage Monitoring:**
+```javascript
+socket.on('quota:warning', (data) => {
+  if (data.usagePercentage >= 90) {
+    showBanner(`⚠️ Storage ${data.usagePercentage}% full. Clean up files or upgrade.`);
+  }
+});
+
+socket.on('quota:exceeded', (data) => {
+  showModal('Storage Full', 'Cannot upload more files. Please upgrade or delete files.');
+});
+```
+
+**5. User Presence:**
+```javascript
+// Track online users in a shared folder
+const onlineUsers = new Set();
+
+socket.on('user:online', (data) => {
+  onlineUsers.add(data.userId);
+  updatePresenceIndicator(data.userId, 'online');
+});
+
+socket.on('user:offline', (data) => {
+  onlineUsers.delete(data.userId);
+  updatePresenceIndicator(data.userId, 'offline');
+});
+```
+
+#### Security & Performance
+
+**Authentication:**
+- ✅ JWT token verification on connection
+- ✅ Token validated against database
+- ✅ Suspended users blocked
+- ✅ User info attached to socket instance
+
+**Authorization:**
+- ✅ Users only receive events they're authorized to see
+- ✅ Personal room (`user:<userId>`) for private events
+- ✅ Resource rooms require proper access permissions
+
+**Performance:**
+- ✅ Automatic reconnection on connection loss
+- ✅ Configurable ping/pong timeouts (60s timeout, 25s interval)
+- ✅ Support for WebSocket and polling transports
+- ✅ Room-based event targeting (not broadcast to all)
+
+**Scalability Notes:**
+- Current setup: Single server instance
+- For production scaling: Use Redis adapter for multi-server Socket.IO
+- Horizontal scaling requires sticky sessions or Redis pub/sub
+
+#### Error Handling
+
+**Connection Errors:**
+```javascript
+socket.on('connect_error', (error) => {
+  console.error('Connection error:', error.message);
+  
+  if (error.message === 'Authentication token required') {
+    // Redirect to login
+    redirectToLogin();
+  }
+  
+  if (error.message === 'Invalid or expired token') {
+    // Refresh token and reconnect
+    refreshTokenAndReconnect();
+  }
+});
+```
+
+**Socket Errors:**
+```javascript
+socket.on('error', (error) => {
+  console.error('Socket error:', error.message);
+  showErrorToast(error.message);
+});
+```
+
+#### Testing Socket.IO
+
+**Using Socket.IO Client CLI:**
+
+```bash
+npm install -g socket.io-client-cli
+
+# Connect with token
+socket-io-client http://localhost:5000 \
+  --auth '{"token":"your_jwt_token"}' \
+  --listen 'notification:new' \
+  --listen 'file:uploaded'
+```
+
+**Using Postman:**
+1. Create new WebSocket request
+2. Connect to `ws://localhost:5000`
+3. Add authentication in connection settings
+4. Listen for events and emit test events
+
+---
+
 ## Architecture
 
 ```
@@ -3230,7 +3781,7 @@ Response
 | 14 | CLI / Command Interface | ✅ Done |
 | 15 | Activity Logs + Notifications | ✅ Done |
 | 16 | Admin System | ✅ Done |
-| 17 | Real-Time Socket.IO | ⏳ Next |
-| 18 | Payments + Storage Upgrades | ⏳ Planned |
+| 17 | Real-Time Socket.IO | ✅ Done |
+| 18 | Payments + Storage Upgrades | ⏳ Next |
 | 19 | Security + Testing | ⏳ Planned |
 | 20 | Production Deployment | ⏳ Planned |
